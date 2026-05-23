@@ -1,4 +1,4 @@
-"""
+﻿"""
 CA-cert lifecycle for MMDF (Man-in-the-Middle + Domain Fronting).
 
 MMDF intercepts client TLS, presents an "instant" leaf certificate signed by a
@@ -10,7 +10,7 @@ installed in the OS / browser trust store. This module:
   * persists them in the runtime data directory
   * provides OS-specific install / detection (mac / windows / linux)
 
-Two cert backends are supported transparently — whichever is available wins:
+Two cert backends are supported transparently â€” whichever is available wins:
 
   * ``cryptography`` (preferred): pure-Python x509, no fork overhead per leaf.
   * ``openssl`` CLI (fallback): zero Python deps, slightly slower (one
@@ -30,11 +30,11 @@ import tempfile
 
 from utils import data_store
 
-CA_COMMON_NAME = "WhiteProxy MMDF Root CA"
+CA_COMMON_NAME = "WhiteDNS MMDF Root CA"
 CA_CERT_FILENAME = "mmdf_ca.crt"
 CA_KEY_FILENAME = "mmdf_ca.key"
 CA_FINGERPRINT_FILENAME = "mmdf_ca.sha1"
-NSS_NICKNAME = "WhiteProxy MMDF CA"
+NSS_NICKNAME = "WhiteDNS MMDF CA"
 
 
 def ca_cert_path():
@@ -136,7 +136,7 @@ def _generate_ca_cryptography(cert_path, key_path):
     private_key = rsa.generate_private_key(public_exponent=65537, key_size=3072)
     subject = issuer = x509.Name([
         x509.NameAttribute(NameOID.COMMON_NAME, CA_COMMON_NAME),
-        x509.NameAttribute(NameOID.ORGANIZATION_NAME, "WhiteProxy"),
+        x509.NameAttribute(NameOID.ORGANIZATION_NAME, "WhiteDNS"),
     ])
     now = datetime.datetime.now(datetime.timezone.utc)
     cert = (
@@ -183,7 +183,7 @@ def _generate_ca_openssl(cert_path, key_path):
         "-nodes",
         "-keyout", key_path,
         "-out", cert_path,
-        "-subj", f"/CN={CA_COMMON_NAME}/O=WhiteProxy",
+        "-subj", f"/CN={CA_COMMON_NAME}/O=WhiteDNS",
         "-addext", "basicConstraints=critical,CA:TRUE",
         "-addext", "keyUsage=critical,keyCertSign,cRLSign",
         "-addext", "subjectKeyIdentifier=hash",
@@ -241,9 +241,9 @@ def is_ca_installed():
 
     if sysplat.startswith("linux"):
         for store in (
-            "/usr/local/share/ca-certificates/whiteproxy-mmdf-ca.crt",
-            "/etc/ca-certificates/trust-source/anchors/whiteproxy-mmdf-ca.crt",
-            "/etc/pki/ca-trust/source/anchors/whiteproxy-mmdf-ca.crt",
+            "/usr/local/share/ca-certificates/whitedns-mmdf-ca.crt",
+            "/etc/ca-certificates/trust-source/anchors/whitedns-mmdf-ca.crt",
+            "/etc/pki/ca-trust/source/anchors/whitedns-mmdf-ca.crt",
         ):
             if os.path.exists(store):
                 return True
@@ -390,17 +390,17 @@ def _install_linux(cert_path):
     targets = []
     if os.path.isdir("/usr/local/share/ca-certificates"):
         targets.append((
-            "/usr/local/share/ca-certificates/whiteproxy-mmdf-ca.crt",
+            "/usr/local/share/ca-certificates/whitedns-mmdf-ca.crt",
             ["update-ca-certificates"],
         ))
     if os.path.isdir("/etc/pki/ca-trust/source/anchors"):
         targets.append((
-            "/etc/pki/ca-trust/source/anchors/whiteproxy-mmdf-ca.crt",
+            "/etc/pki/ca-trust/source/anchors/whitedns-mmdf-ca.crt",
             ["update-ca-trust", "extract"],
         ))
     if os.path.isdir("/etc/ca-certificates/trust-source/anchors"):
         targets.append((
-            "/etc/ca-certificates/trust-source/anchors/whiteproxy-mmdf-ca.crt",
+            "/etc/ca-certificates/trust-source/anchors/whitedns-mmdf-ca.crt",
             ["trust", "extract-compat"],
         ))
 

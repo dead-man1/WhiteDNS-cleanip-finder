@@ -1,4 +1,4 @@
-package proxy
+﻿package proxy
 
 import (
 	"bufio"
@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"whiteproxy-go/internal/config"
+	"whitedns-go/internal/config"
 )
 
 type Server struct {
@@ -27,7 +27,7 @@ func (s *Server) Run() error {
 	}
 	defer ln.Close()
 
-	log.Printf("[*] WHITE PROXY (Go port) listening on %s", s.Addr)
+	log.Printf("[*] WHITEDNS (Go port) listening on %s", s.Addr)
 	for {
 		conn, err := ln.Accept()
 		if err != nil {

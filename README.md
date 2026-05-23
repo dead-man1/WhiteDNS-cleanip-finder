@@ -1,4 +1,4 @@
-# White Proxy Go Port (Phase 1)
+﻿# WhiteDNS Go Port (Phase 1)
 
 This is an incremental Go port scaffold that keeps the original Python project untouched.
 
@@ -31,21 +31,21 @@ The bridge mode calls Python for those actions today so scanner behavior remains
 
 ```powershell
 cd go-port
-go run ./cmd/whiteproxy -mode ui -host 0.0.0.0 -port 7080
+go run ./cmd/whitedns -mode ui -host 0.0.0.0 -port 7080
 ```
 
 Direct proxy mode only:
 
 ```powershell
 cd go-port
-go run ./cmd/whiteproxy -mode proxy -host 0.0.0.0 -port 7080
+go run ./cmd/whitedns -mode proxy -host 0.0.0.0 -port 7080
 ```
 
 ## Build
 
 ```powershell
 cd go-port
-go build -o white-proxy-go.exe ./cmd/whiteproxy
+go build -o whitedns-go.exe ./cmd/whitedns
 ```
 
 ## Migration Strategy

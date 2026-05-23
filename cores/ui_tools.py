@@ -1,4 +1,4 @@
-import os
+﻿import os
 import time
 
 import utils.asn_engine as asn_engine
@@ -27,7 +27,7 @@ def menu_reroute_domain():
         ui_layout.print_ok(f"Found bad route: {base_domain} -> {bad_ip}")
         ui_layout.print_ok("Route removed from cache.")
         ui_layout.print_ok(f"Banned {bad_ip} for {base_domain} only.")
-        print("\n" + ui_layout.color_text("[✓] Done. Visit the site again to force a new race.", "ok"))
+        print("\n" + ui_layout.color_text("[âœ“] Done. Visit the site again to force a new race.", "ok"))
     else:
         ui_layout.print_err(f"No active route found for {domain}.")
         if result.get("removed_failed"):
@@ -111,7 +111,7 @@ def menu_install_mmdf_ca():
     normal (often blocked) routing path.
     """
     ui_layout.draw_header(ui_mode="white")
-    ui_layout.print_section("MMDF CA — Install Root Certificate", tone="mode_white")
+    ui_layout.print_section("MMDF CA â€” Install Root Certificate", tone="mode_white")
     ui_layout.print_hint("Required so MMDF can MITM TLS to Meet/YouTube using a locally-trusted leaf cert.")
 
     summary = mmdf_ca.status_summary()
@@ -128,7 +128,7 @@ def menu_install_mmdf_ca():
     if summary["ca_files_present"]:
         ui_layout.print_ok(f"CA files present:\n   {summary['cert_path']}\n   {summary['key_path']}")
     else:
-        ui_layout.print_warn("CA files have not been generated yet — will be created now.")
+        ui_layout.print_warn("CA files have not been generated yet â€” will be created now.")
 
     state = summary["is_installed"]
     if state is True:
@@ -146,7 +146,7 @@ def menu_install_mmdf_ca():
     choice = input("\nChoice: ").strip().lower()
 
     if choice == "1":
-        ui_layout.print_hint("Installing — you may be prompted for admin / sudo password...")
+        ui_layout.print_hint("Installing â€” you may be prompted for admin / sudo password...")
         result = mmdf_ca.install_ca()
         if result.get("ok"):
             ui_layout.print_ok(result.get("message") or "Installed.")
@@ -169,7 +169,7 @@ def menu_install_mmdf_ca():
         ui_layout.print_ok("CA paths:")
         print(f"  cert: {cert}")
         print(f"  key:  {key}")
-        ui_layout.print_hint("Linux:   sudo cp <cert> /usr/local/share/ca-certificates/whiteproxy-mmdf-ca.crt && sudo update-ca-certificates")
+        ui_layout.print_hint("Linux:   sudo cp <cert> /usr/local/share/ca-certificates/whitedns-mmdf-ca.crt && sudo update-ca-certificates")
         ui_layout.print_hint("macOS:   sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain <cert>")
         ui_layout.print_hint("Windows: certutil -addstore -f Root <cert>   (run as Administrator)")
         input("\nPress Enter to return...")

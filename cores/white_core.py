@@ -1,4 +1,4 @@
-import asyncio
+﻿import asyncio
 import socket
 import struct
 import time
@@ -17,7 +17,7 @@ from utils import mmdf_ca
 from cores import mmdf_engine
 
 # Set true at proxy startup if the local CA is installed in the OS trust
-# store. MMDF MITM is skipped otherwise — leaf certs would not validate in
+# store. MMDF MITM is skipped otherwise â€” leaf certs would not validate in
 # the client browser without a trusted root.
 _MMDF_READY = False
 _MMDF_PREFER_FRONT_IP = True
@@ -69,7 +69,7 @@ async def relay(reader, writer, is_client_to_remote=False, first_byte=b'', track
     # Read size optimized for throughput
     read_size = 65536
 
-    # Throughput watchdog only runs on the remote→client (download) leg of a
+    # Throughput watchdog only runs on the remoteâ†’client (download) leg of a
     # white-routed connection. DPI traffic deliberately uses a different
     # endpoint and is scored elsewhere.
     watchdog_active = (not is_client_to_remote) and route_host is not None and route_endpoint is not None
@@ -143,7 +143,7 @@ async def relay(reader, writer, is_client_to_remote=False, first_byte=b'', track
             rotated = APP_SERVICE.record_dpi_failure_and_maybe_rotate()
             if rotated:
                 old_strat, new_strat = rotated
-                print(f"\n[🔄 AUTO-TUNE] DPI blocked strategy '{old_strat.upper()}'. Dynamically switching to '{new_strat.upper()}'!")
+                print(f"\n[ðŸ”„ AUTO-TUNE] DPI blocked strategy '{old_strat.upper()}'. Dynamically switching to '{new_strat.upper()}'!")
         elif track_dpi and not is_client_to_remote and bytes_transferred > 0:
             APP_SERVICE.clear_dpi_failures()
 
@@ -260,7 +260,7 @@ async def _resolve_and_connect(target_host, target_port, client_writer, use_dpi=
             return remote_reader, remote_writer, actual_ip, actual_port
 
         if use_dpi:
-            # DPI uses a configured/derived IP — retrying won't change it.
+            # DPI uses a configured/derived IP â€” retrying won't change it.
             return None, None, None, None
 
         # Connect failed for a white-routed IP. Demote it, exclude it from
@@ -274,7 +274,7 @@ async def _resolve_and_connect(target_host, target_port, client_writer, use_dpi=
         )
         forbidden.add((actual_ip, actual_port))
         if attempt + 1 < attempts:
-            print(f"[↻ REROUTE] {target_host}:{target_port} via {actual_ip}:{actual_port} failed. Re-racing without it...")
+            print(f"[â†» REROUTE] {target_host}:{target_port} via {actual_ip}:{actual_port} failed. Re-racing without it...")
 
     return None, None, None, None
 
@@ -491,7 +491,7 @@ async def handle_transparent(first_byte, client_reader, client_writer):
         )
 
         if is_dpi and actual_ip:
-            log_dpi(f"[🔥 ROUTE] Transparent TLS -> {helpers.format_ip_port(actual_ip, actual_port)} (Mode: {config.CONNECTION_MODE}, SNI: {target_host})")
+            log_dpi(f"[ðŸ”¥ ROUTE] Transparent TLS -> {helpers.format_ip_port(actual_ip, actual_port)} (Mode: {config.CONNECTION_MODE}, SNI: {target_host})")
 
         if not remote_reader:
             client_writer.close()
@@ -532,7 +532,7 @@ async def handle_socks5(client_reader, client_writer):
         target_port = struct.unpack("!H", await client_reader.readexactly(2))[0]
         await asyncio.sleep(0)
 
-        # MMDF routing — accept the SOCKS5 connect, then hand the cleartext
+        # MMDF routing â€” accept the SOCKS5 connect, then hand the cleartext
         # socket to the MMDF engine which will read the ClientHello, MITM
         # the TLS, and bridge to the front-IP.
         if _MMDF_READY and config.is_tls_port(target_port) and mmdf_engine.host_matches_mmdf(target_host):
@@ -552,7 +552,7 @@ async def handle_socks5(client_reader, client_writer):
         )
 
         if is_dpi and actual_ip:
-            log_dpi(f"[🔥 ROUTE] {target_host}:{target_port} -> {helpers.format_ip_port(actual_ip, actual_port)} (Mode: {config.CONNECTION_MODE})")
+            log_dpi(f"[ðŸ”¥ ROUTE] {target_host}:{target_port} -> {helpers.format_ip_port(actual_ip, actual_port)} (Mode: {config.CONNECTION_MODE})")
 
         if not remote_reader:
             client_writer.write(b"\x05\x05\x00\x01\x00\x00\x00\x00\x00\x00")
@@ -647,7 +647,7 @@ async def handle_http(first_byte, client_reader, client_writer):
         )
 
         if is_dpi and actual_ip:
-            log_dpi(f"[🔥 ROUTE] {target_host}:{target_port} -> {helpers.format_ip_port(actual_ip, actual_port)} (Mode: {config.CONNECTION_MODE})")
+            log_dpi(f"[ðŸ”¥ ROUTE] {target_host}:{target_port} -> {helpers.format_ip_port(actual_ip, actual_port)} (Mode: {config.CONNECTION_MODE})")
 
         if not remote_reader:
             client_writer.write(b"HTTP/1.1 502 Bad Gateway\r\n\r\n")
@@ -712,7 +712,7 @@ async def handle_client(client_reader, client_writer):
 # PROXY ENTRY POINT
 # ==========================================
 async def run():
-    """Main execution point for the White Proxy server engine."""
+    """Main execution point for the WhiteDNS server engine."""
     try:
         await _run_proxy()
     except KeyboardInterrupt:
@@ -770,20 +770,20 @@ def _resolve_mmdf_runtime():
 
     if not mmdf_ca.any_backend_available():
         print(
-            "[MMDF] Disabled — no cert backend found. "
+            "[MMDF] Disabled â€” no cert backend found. "
             "Install Python `cryptography` (pip install cryptography) "
             "or the OpenSSL CLI (apt/brew/choco install openssl)."
         )
         return
     if not mmdf_ca.ca_files_exist():
-        print("[MMDF] Disabled — local CA not initialized. Use the menu option to install the CA.")
+        print("[MMDF] Disabled â€” local CA not initialized. Use the menu option to install the CA.")
         return
     installed = mmdf_ca.is_ca_installed()
     if installed is False:
-        print("[MMDF] Disabled — local CA is not in the system / browser trust store. Use the menu to install it.")
+        print("[MMDF] Disabled â€” local CA is not in the system / browser trust store. Use the menu to install it.")
         return
     if installed is None:
-        print("[MMDF] CA install state could not be verified — proceeding anyway.")
+        print("[MMDF] CA install state could not be verified â€” proceeding anyway.")
 
     try:
         sni_answer = input("[MMDF] Manual front SNI override [Default: per-domain profiles]: ").strip()
@@ -870,13 +870,13 @@ async def _run_proxy():
     try:
         server = await asyncio.start_server(handle_client, host=['0.0.0.0', '::'], port=config.PROXY_PORT)
     except OSError:
-        print("[!] IPv6 binding failed — falling back to IPv4-only (0.0.0.0). This is normal on Windows/Termux.")
+        print("[!] IPv6 binding failed â€” falling back to IPv4-only (0.0.0.0). This is normal on Windows/Termux.")
         server = await asyncio.start_server(handle_client, host='0.0.0.0', port=config.PROXY_PORT)
     
     helpers.clear_screen()
     local_ip = helpers.get_local_ip()
     print("=" * 50)
-    print(f"[*] WHITE PROXY LISTENING ON {config.PROXY_HOST}:{config.PROXY_PORT}")
+    print(f"[*] WHITEDNS LISTENING ON {config.PROXY_HOST}:{config.PROXY_PORT}")
     print(f"[*] Connect your devices to: {local_ip}:{config.PROXY_PORT}")
     print("[*] Supporting MIXED mode: SOCKS5, HTTP/HTTPS, and V2Ray Transparent TLS")
     
@@ -886,7 +886,7 @@ async def _run_proxy():
     elif config.CONNECTION_MODE == "mixed":
         mode_display = "Mixed (V2Ray=Desync, Web=White IPs)"
     
-    print(f"[🔥] CONNECTION MODE: {mode_display}")
+    print(f"[ðŸ”¥] CONNECTION MODE: {mode_display}")
     if config.CONNECTION_MODE in ["dpi_desync", "mixed"]:
         print(f"    -> Spoofed SNI:  {config.DPI_SNI} (Pool Rotation Active)")
         print(f"    -> Routing IP:   {config.DPI_IP if config.DPI_IP else 'Auto-resolve'}")

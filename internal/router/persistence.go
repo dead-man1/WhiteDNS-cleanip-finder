@@ -1,10 +1,10 @@
-package router
+﻿package router
 
 import (
 	"fmt"
 	"os"
 	"strings"
-	"whiteproxy-go/internal/storage"
+	"whitedns-go/internal/storage"
 )
 
 // SaveRoutes persists all cached routes to disk

@@ -1,14 +1,14 @@
-"""
+﻿"""
 MMDF (Man-in-the-Middle + Domain Fronting) engine.
 
 Adapted from https://github.com/patterniha/MMDF (v5 of the technique). The
 trojan transport layer is dropped, only the "instant certificate" TLS-MITM
-core remains, wired into white-proxy's routing engine.
+core remains, wired into whitedns's routing engine.
 
 Per connection:
   1. The client opens TLS to the real target hostname (Meet, YouTube, ...).
      We terminate that TLS using a leaf cert generated on the fly and signed
-     by the local MMDF CA — the client trusts it because the CA is in the
+     by the local MMDF CA â€” the client trusts it because the CA is in the
      OS / browser trust store.
   2. We open a *new* TLS connection out to the target's edge fleet using a
      real sibling hostname as SNI (e.g. ``www.google.com`` for any Google
@@ -19,7 +19,7 @@ Per connection:
   3. We pump cleartext bytes back and forth between the two TLS endpoints.
 
 Key contract: the outbound SNI must be a *real* hostname served by the same
-edge fleet — random fake SNIs do not work because the edge has no cert for
+edge fleet â€” random fake SNIs do not work because the edge has no cert for
 them and either closes the connection or serves a default vhost.
 """
 import asyncio
@@ -111,10 +111,10 @@ class InstantCertContext:
     """Per-SNI leaf certs signed by the local MMDF CA. Two cert backends are
     supported transparently:
 
-      * ``cryptography`` — pure-Python, in-memory signing, no fork overhead.
-      * ``openssl`` CLI — zero Python deps, signs each leaf via subprocess.
+      * ``cryptography`` â€” pure-Python, in-memory signing, no fork overhead.
+      * ``openssl`` CLI â€” zero Python deps, signs each leaf via subprocess.
 
-    The leaf private key is generated once and reused across SNIs — clients
+    The leaf private key is generated once and reused across SNIs â€” clients
     verify the CA signature on the leaf, not the keypair identity. Bundles
     (leaf key + leaf cert + CA cert) are cached on disk per SNI so the
     second hit on the same hostname is essentially free.
@@ -209,7 +209,7 @@ class InstantCertContext:
     def _mint_leaf(self, hostname):
         """Sign a leaf cert for ``hostname`` and write the full PEM bundle.
 
-        Returns the bundle path. Threadsafe — concurrent first-hits on the
+        Returns the bundle path. Threadsafe â€” concurrent first-hits on the
         same SNI are serialized so we don't sign twice.
         """
         bundle_path = self._bundle_path(hostname)
@@ -297,7 +297,7 @@ class InstantCertContext:
         )
         res = subprocess.run(cmd, input=extfile, capture_output=True, text=True)
         if res.returncode != 0 or not os.path.exists(tmp_leaf):
-            # /dev/stdin isn't readable on every OpenSSL/Windows build —
+            # /dev/stdin isn't readable on every OpenSSL/Windows build â€”
             # retry with a real temp extfile.
             import tempfile
             with tempfile.NamedTemporaryFile("w", suffix=".cnf", delete=False) as f:
@@ -381,7 +381,7 @@ def _ensure_instant_ctx():
             backend = mmdf_ca.select_backend()
             if backend is None:
                 _INSTANT_CTX_ERR = (
-                    "no cert backend available — install Python `cryptography` "
+                    "no cert backend available â€” install Python `cryptography` "
                     "or the OpenSSL CLI"
                 )
                 return None, _INSTANT_CTX_ERR
@@ -425,7 +425,7 @@ def _is_excluded_host(host_lower):
 def match_fronting_profile(host: str):
     """Return the first profile whose domain list matches the host, or None.
 
-    Hosts in ``MMDF_DOMAIN_EXCLUDES`` (e.g. gemini.google.com — they don't
+    Hosts in ``MMDF_DOMAIN_EXCLUDES`` (e.g. gemini.google.com â€” they don't
     allow domain fronting and 403 the inner Host) skip MMDF entirely.
     """
     if not host:
@@ -803,7 +803,7 @@ async def handle_mmdf_connection(client_reader, client_writer, target_host, targ
         return False
 
     print(
-        f"[🌀 MMDF/{profile['name']}] {target_host or leaf_host}:{target_port} "
+        f"[ðŸŒ€ MMDF/{profile['name']}] {target_host or leaf_host}:{target_port} "
         f"-> {out_ip}:{out_port} (front={front_sni}, alpn={negotiated_alpn or 'unset'})"
     )
 

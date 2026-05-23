@@ -1,4 +1,4 @@
-import os
+﻿import os
 import sys
 
 import utils.config as config
@@ -93,14 +93,14 @@ def _mode_label(connection_mode):
 
 def draw_header(ui_mode=None):
     helpers.clear_screen()
-    line = color_text("═" * 60, "dim")
-    title = color_text(f" WHITE PROXY v{config.VERSION} ", "title")
+    line = color_text("â•" * 60, "dim")
+    title = color_text(f" WHITEDNS v{config.VERSION} ", "title")
     print(line)
     print(title)
     print(line)
 
     pool_size = len(config.IP_POOL)
-    active_ui = "White Proxy" if ui_mode != "desync" else "Desync"
+    active_ui = "WhiteDNS" if ui_mode != "desync" else "Desync"
     print(f" {color_text('UI Mode', 'section'):12}: {active_ui}")
     print(f" {color_text('Conn Mode', 'section'):12}: {_mode_label(config.CONNECTION_MODE)}")
     print(f" {color_text('Proxy', 'section'):12}: {config.PROXY_HOST}:{config.PROXY_PORT} (Local: {helpers.get_local_ip()})")
@@ -137,11 +137,11 @@ def print_main_menu(ui_mode="white"):
         print(" [d] Start Proxy (DPI Desync)")
         print(" [m] Start Proxy (Mixed)")
         print("\n" + color_text(" Navigation", "nav"))
-        print(" [x] Switch to White Proxy Mode")
+        print(" [x] Switch to WhiteDNS Mode")
         print(" [0] Exit")
         return
 
-    print(color_text(" WHITE PROXY MODE", "mode_white"))
+    print(color_text(" WHITEDNS MODE", "mode_white"))
     print(" [1] Scan Targets and Build IP Pool")
     print(" [2] Reload IP Pool from Latest Scan")
     print(" [3] Instant Connect (Load IPs without scan)")

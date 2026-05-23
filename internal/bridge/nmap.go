@@ -1,9 +1,9 @@
-package bridge
+﻿package bridge
 
 import (
 	"fmt"
 	"os"
-	"whiteproxy-go/internal/nmap"
+	"whitedns-go/internal/nmap"
 )
 
 // InitializeNmap initializes the bundled nmap and returns its path
@@ -15,7 +15,7 @@ func InitializeNmap() (string, error) {
 	}
 
 	// Set environment variable so Python can find it
-	if err := os.Setenv("WHITEPROXY_NMAP_PATH", path); err != nil {
+	if err := os.Setenv("WHITEDNS_NMAP_PATH", path); err != nil {
 		return "", fmt.Errorf("failed to set nmap environment: %w", err)
 	}
 

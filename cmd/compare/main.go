@@ -1,4 +1,4 @@
-package main
+﻿package main
 
 import (
 	"bufio"
@@ -13,7 +13,7 @@ import (
 	"strconv"
 	"time"
 
-	"whiteproxy-go/internal/scanner"
+	"whitedns-go/internal/scanner"
 )
 
 // compare probes a single target and runs both Go and Python classifiers on

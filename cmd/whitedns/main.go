@@ -1,4 +1,4 @@
-package main
+﻿package main
 
 import (
 	"flag"
@@ -8,15 +8,15 @@ import (
 	"path/filepath"
 	"time"
 
-	"whiteproxy-go/internal/asn"
-	"whiteproxy-go/internal/bridge"
-	"whiteproxy-go/internal/config"
-	"whiteproxy-go/internal/proxy"
-	"whiteproxy-go/internal/router"
-	"whiteproxy-go/internal/rules"
-	"whiteproxy-go/internal/scanner"
-	"whiteproxy-go/internal/storage"
-	"whiteproxy-go/internal/ui"
+	"whitedns-go/internal/asn"
+	"whitedns-go/internal/bridge"
+	"whitedns-go/internal/config"
+	"whitedns-go/internal/proxy"
+	"whitedns-go/internal/router"
+	"whitedns-go/internal/rules"
+	"whitedns-go/internal/scanner"
+	"whitedns-go/internal/storage"
+	"whitedns-go/internal/ui"
 )
 
 // syncWriter wraps an *os.File and forces a Sync after each Write
@@ -64,7 +64,7 @@ func parseFlags(cfg config.Config) (string, string, int) {
 }
 
 func initStorage() string {
-	dataDir := filepath.Join(os.Getenv("HOME"), ".whiteproxy")
+	dataDir := filepath.Join(os.Getenv("HOME"), ".whitedns")
 	if err := storage.InitPaths(dataDir); err != nil {
 		log.Printf("[!] Warning: Failed to init storage: %v", err)
 	}
@@ -104,7 +104,7 @@ func buildServices(dataDir string) (*scanner.Scanner, *router.Router, *asn.ASNEn
 	if err := os.MkdirAll(logDir, 0755); err != nil {
 		log.Printf("[!] Warning: Could not create logs directory: %v", err)
 	} else {
-		logFilePath := filepath.Join(logDir, fmt.Sprintf("whiteproxy_%s.log", time.Now().Format("2006-01-02_15-04-05")))
+		logFilePath := filepath.Join(logDir, fmt.Sprintf("whitedns_%s.log", time.Now().Format("2006-01-02_15-04-05")))
 		f, err := os.OpenFile(logFilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 		if err != nil {
 			log.Printf("[!] Warning: Could not open shared log file: %v", err)

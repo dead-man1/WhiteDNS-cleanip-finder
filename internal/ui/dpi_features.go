@@ -1,4 +1,4 @@
-package ui
+﻿package ui
 
 import (
 	"fmt"
@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 
-	"whiteproxy-go/internal/storage"
+	"whitedns-go/internal/storage"
 )
 
 func loadDesyncPairs(dataDir string) map[string][]string {

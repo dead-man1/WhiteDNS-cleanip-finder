@@ -1,4 +1,4 @@
-package ui
+﻿package ui
 
 import (
 	"bufio"
@@ -16,15 +16,15 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"whiteproxy-go/internal/asn"
-	"whiteproxy-go/internal/bridge"
-	"whiteproxy-go/internal/config"
-	"whiteproxy-go/internal/mmdf"
-	"whiteproxy-go/internal/proxy"
-	"whiteproxy-go/internal/router"
-	"whiteproxy-go/internal/rules"
-	"whiteproxy-go/internal/scanner"
-	"whiteproxy-go/internal/storage"
+	"whitedns-go/internal/asn"
+	"whitedns-go/internal/bridge"
+	"whitedns-go/internal/config"
+	"whitedns-go/internal/mmdf"
+	"whitedns-go/internal/proxy"
+	"whitedns-go/internal/router"
+	"whitedns-go/internal/rules"
+	"whitedns-go/internal/scanner"
+	"whitedns-go/internal/storage"
 )
 
 type App struct {
@@ -146,10 +146,10 @@ func (a *App) startGoProxy(mode string) {
 
 func drawHeader(cfg config.Config, mode string) {
 	clearScreen()
-	fmt.Println("â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•")
+	fmt.Println("Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â")
 	fmt.Println(" WHITEDNS v9.2.0 ")
 	fmt.Println(" developed by ashentajir ")
-	fmt.Println("â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•")
+	fmt.Println("Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â")
 	uiLabel := "WhiteDNS"
 	if mode == "desync" {
 		uiLabel = "Desync"
@@ -157,7 +157,7 @@ func drawHeader(cfg config.Config, mode string) {
 	fmt.Printf(" UI Mode: %s\n", uiLabel)
 	fmt.Printf(" Conn Mode: %s\n", mapMode(mode))
 	fmt.Printf(" Proxy: %s\n", cfg.ListenAddr())
-	fmt.Println("â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•")
+	fmt.Println("Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â")
 }
 
 func printMainMenu(uiMode string) {
@@ -880,13 +880,13 @@ func (a *App) promptScanMethod(totalTargets, totalPorts int, httpMode bool) stri
 	fmt.Println(" SCAN METHOD")
 	totalEPS := totalTargets * totalPorts
 	if httpMode {
-		fmt.Printf(" [1] Normal (Go/direct)             â€” %d probes (%d IPs × %d ports)\n", totalEPS, totalTargets, totalPorts)
-		fmt.Printf(" [2] Masscan preflight              â€” %d probes (%d IPs × %d ports)\n", totalEPS, totalTargets, totalPorts)
-		fmt.Printf(" [3] Nmap preflight                 â€” %d probes (%d IPs × %d ports)\n", totalEPS, totalTargets, totalPorts)
+		fmt.Printf(" [1] Normal (Go/direct)             Ã¢â‚¬â€ %d probes (%d IPs Ã— %d ports)\n", totalEPS, totalTargets, totalPorts)
+		fmt.Printf(" [2] Masscan preflight              Ã¢â‚¬â€ %d probes (%d IPs Ã— %d ports)\n", totalEPS, totalTargets, totalPorts)
+		fmt.Printf(" [3] Nmap preflight                 Ã¢â‚¬â€ %d probes (%d IPs Ã— %d ports)\n", totalEPS, totalTargets, totalPorts)
 	} else {
-		fmt.Printf(" [1] Normal (Go/direct)             â€” %d probes (%d IPs × %d ports)\n", totalEPS, totalTargets, totalPorts)
-		fmt.Printf(" [2] Masscan preflight              â€” %d probes (%d IPs × %d ports)\n", totalEPS, totalTargets, totalPorts)
-		fmt.Printf(" [3] Nmap preflight                 â€” %d probes (%d IPs × %d ports)\n", totalEPS, totalTargets, totalPorts)
+		fmt.Printf(" [1] Normal (Go/direct)             Ã¢â‚¬â€ %d probes (%d IPs Ã— %d ports)\n", totalEPS, totalTargets, totalPorts)
+		fmt.Printf(" [2] Masscan preflight              Ã¢â‚¬â€ %d probes (%d IPs Ã— %d ports)\n", totalEPS, totalTargets, totalPorts)
+		fmt.Printf(" [3] Nmap preflight                 Ã¢â‚¬â€ %d probes (%d IPs Ã— %d ports)\n", totalEPS, totalTargets, totalPorts)
 	}
 
 	methodMap := map[string]string{"1": "direct", "2": "masscan", "3": "nmap"}
@@ -1069,7 +1069,7 @@ func (a *App) selectASNScanTargets() []string {
 		fmt.Printf("\nSearch Query: %s\n", query)
 		fmt.Printf(" Total Matches: %d ASNs\n", len(groups))
 		fmt.Printf(" Selected ASNs: %d\n", countSelectedASN(selected))
-		fmt.Println("â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•")
+		fmt.Println("Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â")
 		for i, group := range groups[start:end] {
 			mark := " "
 			if selected[group.ASN] {

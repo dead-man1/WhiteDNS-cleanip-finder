@@ -1,42 +1,42 @@
-"""
-autotuner.py — Latency-Aware Scan Rate Auto-Tuner v2
+﻿"""
+autotuner.py â€” Latency-Aware Scan Rate Auto-Tuner v2
 =====================================================
 
 What was wrong with v1
-──────────────────────
-1. BURST-NOT-SUSTAINED — run_tcp_scan() fires each endpoint once, then stops.
+â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+1. BURST-NOT-SUSTAINED â€” run_tcp_scan() fires each endpoint once, then stops.
    At concurrency=1080 with 3000 endpoints and 2-3s avg latency the entire
    list drains in ~8 seconds.  The remaining 82s of the "90s wave" are idle.
    You were stress-testing an 8-second burst, declaring it safe, then being
    surprised when hours of real scanning congested the network.
 
-2. COVERAGE IS THE WRONG METRIC — endpoints eventually respond even under
+2. COVERAGE IS THE WRONG METRIC â€” endpoints eventually respond even under
    heavy congestion, they just take much longer and pile up in your router's
    NAT table.  Latency and timeout rate spike *before* coverage drops.
    Using a 82% coverage floor misses all of this.
 
-3. NO GATEWAY RTT SIGNAL — the most direct local congestion indicator is
+3. NO GATEWAY RTT SIGNAL â€” the most direct local congestion indicator is
    completely ignored.  Your router's NAT table filling shows up as gateway
    ping jumping from 3ms to 200ms, long before remote hosts stop answering.
 
-4. ABSOLUTE THRESHOLDS — "82% coverage" doesn't adapt to a network that
+4. ABSOLUTE THRESHOLDS â€” "82% coverage" doesn't adapt to a network that
    already has 5% natural packet loss at calibration.  Everything must be
    ratio-normalised against calibration, not hardcoded.
 
 What v2 does differently
-────────────────────────
-• _sustained_tcp_probe()   Recycles endpoints for the full wave duration,
+â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+â€¢ _sustained_tcp_probe()   Recycles endpoints for the full wave duration,
                            maintaining real concurrency throughout.
-• ProbeStats               Tracks median latency, p90 latency, timeout rate,
+â€¢ ProbeStats               Tracks median latency, p90 latency, timeout rate,
                            and connection count per wave.
-• _health_score()          Combines four signals into one [0,1] score, all
+â€¢ _health_score()          Combines four signals into one [0,1] score, all
                            normalised relative to the calibration run.
-• Gateway RTT              Pings local gateway before/after every wave.
-                           A 2× RTT spike = your router NAT table is filling.
-• Endurance validation     After tuning, the final rate is held for
-                           3× wave_duration to confirm it is stable overnight,
+â€¢ Gateway RTT              Pings local gateway before/after every wave.
+                           A 2Ã— RTT spike = your router NAT table is filling.
+â€¢ Endurance validation     After tuning, the final rate is held for
+                           3Ã— wave_duration to confirm it is stable overnight,
                            not just for a short burst.
-• Conservative margins     Final rate = best × margin where margin is 0.75
+â€¢ Conservative margins     Final rate = best Ã— margin where margin is 0.75
                            for shitty networks (not 0.90).
 """
 
@@ -61,14 +61,14 @@ from utils.asn_engine import expand_target
 from utils.helpers import clear_screen
 
 
-# ──────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # Helpers
-# ──────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def draw_header():
     clear_screen()
     print("==================================================")
-    print(f"   WHITE PROXY SUITE - AUTO-TUNER v{config.VERSION} (latency-aware)")
+    print(f"   WHITEDNS SUITE - AUTO-TUNER v{config.VERSION} (latency-aware)")
     print("==================================================")
 
 
@@ -114,9 +114,9 @@ def _make_sudo_daemon():
     threading.Thread(target=_daemon, daemon=True).start()
 
 
-# ──────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # Gateway RTT measurement
-# ──────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def _find_default_gateway() -> Optional[str]:
     """Detect the local default gateway IP."""
@@ -203,9 +203,9 @@ async def _gateway_baseline_rtt_ms(gateway: Optional[str], samples: int = 5, gap
     return statistics.median(readings)
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Core measurement primitive — SUSTAINED TCP probe
-# ──────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# Core measurement primitive â€” SUSTAINED TCP probe
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 @dataclass
 class ProbeStats:
@@ -309,7 +309,7 @@ async def _sustained_tcp_probe(
                     break
                 await probe_one(ip, port)
 
-    # 3× workers so the semaphore is never starved
+    # 3Ã— workers so the semaphore is never starved
     n_workers = min(concurrency * 3, concurrency + 150)
     worker_tasks = [
         asyncio.create_task(worker(i))
@@ -357,9 +357,9 @@ async def _sustained_tcp_probe(
     )
 
 
-# ──────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # Health scoring
-# ──────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def _health_score(
     probe: ProbeStats,
@@ -375,10 +375,10 @@ def _health_score(
     (high baseline noise).
 
     Score >= 0.72 = healthy
-    Score  0.55–0.72 = degraded (slow down)
+    Score  0.55â€“0.72 = degraded (slow down)
     Score < 0.55 = congested (stop)
     """
-    # 1. Coverage — what fraction of known-alive endpoints responded?
+    # 1. Coverage â€” what fraction of known-alive endpoints responded?
     if baseline_eps:
         coverage = len(baseline_eps & probe.connected_eps) / len(baseline_eps)
     else:
@@ -387,7 +387,7 @@ def _health_score(
 
     # Killswitch: if we are losing most of the baseline, this wave failed.
     if coverage < 0.30:
-        info = f"cov={coverage*100:.0f}% < 30% → score=0.00"
+        info = f"cov={coverage*100:.0f}% < 30% â†’ score=0.00"
         return 0.0, info
 
     def _clamp01(value: float) -> float:
@@ -405,7 +405,7 @@ def _health_score(
             gw_ratio = gw_rtt / effective_cal_gw
             gw_score = _ratio_score(gw_ratio)
             score = _clamp01((cov_score * 0.60) + (gw_score * 0.40))
-            gw_str = f"{gw_ratio:.1f}×({gw_rtt:.0f}ms)"
+            gw_str = f"{gw_ratio:.1f}Ã—({gw_rtt:.0f}ms)"
         else:
             gw_ratio = 1.0
             gw_score = cov_score
@@ -414,31 +414,31 @@ def _health_score(
 
         info = (
             f"cov={coverage*100:.0f}% "
-            f"gw={gw_str} → score={score:.2f}"
+            f"gw={gw_str} â†’ score={score:.2f}"
         )
         return score, info
 
-    # 2. Timeout rate — ratio vs calibration.
+    # 2. Timeout rate â€” ratio vs calibration.
     cal_to = max(0.02, cal.timeout_rate)
     to_ratio = probe.timeout_rate / cal_to
     to_score = _ratio_score(to_ratio)
 
-    # 3. Latency ratio — median latency vs calibration.
+    # 3. Latency ratio â€” median latency vs calibration.
     if cal.median_latency_ms > 5.0 and probe.median_latency_ms > 0:
         lat_ratio = probe.median_latency_ms / cal.median_latency_ms
         lat_score = _ratio_score(lat_ratio)
-        lat_str = f"lat={lat_ratio:.1f}×({probe.median_latency_ms:.0f}ms)"
+        lat_str = f"lat={lat_ratio:.1f}Ã—({probe.median_latency_ms:.0f}ms)"
     else:
         lat_ratio = 1.0
         lat_score = 0.0
         lat_str = "lat=N/A"
 
-    # 4. Gateway RTT ratio — most direct local congestion signal.
+    # 4. Gateway RTT ratio â€” most direct local congestion signal.
     if gw_rtt and cal_gw_rtt and cal_gw_rtt > 0:
         effective_cal_gw = max(15.0, cal_gw_rtt)
         gw_ratio = gw_rtt / effective_cal_gw
         gw_score = _ratio_score(gw_ratio)
-        gw_str = f"gw={gw_ratio:.1f}×({gw_rtt:.0f}ms)"
+        gw_str = f"gw={gw_ratio:.1f}Ã—({gw_rtt:.0f}ms)"
     else:
         gw_ratio = 1.0
         gw_score = 0.0
@@ -454,15 +454,15 @@ def _health_score(
 
     info = (
         f"cov={coverage*100:.0f}% "
-        f"to={probe.timeout_rate*100:.0f}%({to_ratio:.1f}×) "
-        f"{lat_str} {gw_str} → score={score:.2f}"
+        f"to={probe.timeout_rate*100:.0f}%({to_ratio:.1f}Ã—) "
+        f"{lat_str} {gw_str} â†’ score={score:.2f}"
     )
     return score, info
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Masscan / Nmap wrapper that returns ProbeStats (coverage only — no latency)
-# ──────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# Masscan / Nmap wrapper that returns ProbeStats (coverage only â€” no latency)
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 async def _masscan_probe(
     sampled_ips: list,
@@ -517,8 +517,8 @@ async def _nmap_probe(
     Run ONE nmap sweep and measure coverage.
 
     The old loop had two fatal bugs:
-    1. -T2 ("polite") adds ~15 s inter-probe delay, so 400 IPs × 6 ports
-       never finish in a 90 s wave → always 0 % coverage.
+    1. -T2 ("polite") adds ~15 s inter-probe delay, so 400 IPs Ã— 6 ports
+       never finish in a 90 s wave â†’ always 0 % coverage.
     2. execute_nmap_silent can exceed `duration` without raising TimeoutError,
        so the while-loop would block long past deadline ("won't quit" symptom).
 
@@ -537,7 +537,7 @@ async def _nmap_probe(
                 min_r,
                 max(rate, min_r),
                 scan_type,
-                host_timeout="60s",  # was 15s — far too short for real hosts
+                host_timeout="60s",  # was 15s â€” far too short for real hosts
                 duration=duration,
             ),
             timeout=duration + 60.0,   # hard ceiling so we can never hang
@@ -561,9 +561,9 @@ async def _nmap_probe(
     )
 
 
-# ──────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # Core tuning algorithm
-# ──────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 async def _adaptive_tune(
     engine_name: str,
@@ -582,8 +582,8 @@ async def _adaptive_tune(
     Tune a scanner rate using health-score-based congestion detection.
 
     Parameters
-    ──────────
-    probe_fn          Async callable (rate, duration) → ProbeStats.
+    â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    probe_fn          Async callable (rate, duration) â†’ ProbeStats.
     start_rate        Safe starting rate for calibration.
     max_rate          Upper bound.
     wave_duration     Seconds per test wave (actual sustained load duration).
@@ -592,10 +592,10 @@ async def _adaptive_tune(
     baseline_eps      Set of (ip, port) that are known-alive from TCP baseline.
     gateway           Local gateway IP for RTT measurement, or None.
     final_margin      Fraction of best_rate to apply as safety margin.
-    endurance_multiplier  Endurance test = wave_duration × this multiplier.
+    endurance_multiplier  Endurance test = wave_duration Ã— this multiplier.
     """
 
-    # ── Step 1: Calibration ───────────────────────────────────────────────────
+    # â”€â”€ Step 1: Calibration â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     print(f"\n[*] Calibrating {engine_name} at rate {start_rate}...")
 
     cal_probe_task = asyncio.create_task(probe_fn(start_rate, wave_duration))
@@ -622,7 +622,7 @@ async def _adaptive_tune(
         )
         return start_rate
 
-    # ── Step 2: Ramp up (doubling) ────────────────────────────────────────────
+    # â”€â”€ Step 2: Ramp up (doubling) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     print(f"[*] Tuning {engine_name} (ramp to {max_rate}, threshold={health_threshold:.2f})...")
 
     rate = min(max_rate, start_rate * 2)
@@ -669,7 +669,7 @@ async def _adaptive_tune(
             upper_bound = rate
             break
 
-    # ── Step 3 & 4: Fine-tuning & Endurance validation loop ───────────────────
+    # â”€â”€ Step 3 & 4: Fine-tuning & Endurance validation loop â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     search_low, search_high = best_rate, upper_bound
     
     while True:
@@ -693,11 +693,11 @@ async def _adaptive_tune(
         else:
             print("     [+] Binary search converged (within tolerance).")
 
-        # ── Step 4: Endurance validation ──────────────────────────────────────────
+        # â”€â”€ Step 4: Endurance validation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         endurance_dur = wave_duration * endurance_multiplier
         print(
             f"\n[*] Endurance check: holding rate={best_rate} for "
-            f"{endurance_dur:.0f}s ({endurance_multiplier:.0f}× wave duration)..."
+            f"{endurance_dur:.0f}s ({endurance_multiplier:.0f}Ã— wave duration)..."
         )
         print("     This confirms the rate is stable overnight, not just for short bursts.")
 
@@ -742,15 +742,15 @@ async def _adaptive_tune(
 
     final_rate = max(start_rate, int(best_rate * final_margin))
     print(
-        f"[✓] {engine_name} optimized to: {final_rate} "
-        f"(best={best_rate} × margin={final_margin:.2f})"
+        f"[âœ“] {engine_name} optimized to: {final_rate} "
+        f"(best={best_rate} Ã— margin={final_margin:.2f})"
     )
     return final_rate
 
 
-# ──────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # Entry point
-# ──────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def _draw_profile_menu():
     print("\n[?] Select your network quality:")
@@ -778,7 +778,7 @@ async def run():
 
     selected_keys: set[str] = set()
 
-    # ── Scanner selection menu ─────────────────────────────────────────────────
+    # â”€â”€ Scanner selection menu â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     while True:
         draw_header()
         print("===============================================================")
@@ -787,7 +787,7 @@ async def run():
         print("===============================================================\n")
         for i, s in enumerate(scanners):
             checkbox = "[X]" if s["id"] in selected_keys else "[ ]"
-            status = "✓" if s["available"] else "✗"
+            status = "âœ“" if s["available"] else "âœ—"
             print(f"  {i+1:>2}. {checkbox} {status} {s['name']}")
         
         print("\nCommands:")
@@ -830,7 +830,7 @@ async def run():
         input("Press Enter to return...")
         return
 
-    # ── Sudo setup ─────────────────────────────────────────────────────────────
+    # â”€â”€ Sudo setup â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     draw_header()
     print("[*] Latency-Aware Scan Rate Tuner")
     print("[!] Uses sustained load + gateway RTT + latency drift to detect congestion.")
@@ -847,7 +847,7 @@ async def run():
             print("[-] Sudo failed. Skipping Masscan / Nmap tuning.")
             tune_masscan = tune_nmap = False
 
-    # ── Profile selection ──────────────────────────────────────────────────────
+    # â”€â”€ Profile selection â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     # fmt: off
     profiles = {
         "1": {
@@ -900,11 +900,11 @@ async def run():
         f"\n[*] Profile: {p['label']} | "
         f"wave={p['wave_duration']:.0f}s | "
         f"health_threshold={p['health_threshold']:.2f} | "
-        f"endurance={p['endurance_mult']:.0f}× | "
+        f"endurance={p['endurance_mult']:.0f}Ã— | "
         f"safety_margin={p['final_margin']:.2f}"
     )
 
-    # ── Target selection ───────────────────────────────────────────────────────
+    # â”€â”€ Target selection â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     target = input(
         "\n[?] Enter a test subnet or ASN (Default: AS202468 / AbrArvan): "
     ).strip()
@@ -923,10 +923,10 @@ async def run():
     sampled_ips = ips[: min(p["seed_ips"], len(ips))]
     test_endpoints = _endpoints_from_ips(sampled_ips)
 
-    print(f"[*] Selected {len(sampled_ips)} IPs × {len(config.TARGET_PORTS)} ports = {len(test_endpoints)} endpoints.")
+    print(f"[*] Selected {len(sampled_ips)} IPs Ã— {len(config.TARGET_PORTS)} ports = {len(test_endpoints)} endpoints.")
 
-    # ── TCP Baseline ───────────────────────────────────────────────────────────
-    print("\n[*] Step 1: TCP Baseline — finding all live endpoints (not timed, no load)...")
+    # â”€â”€ TCP Baseline â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    print("\n[*] Step 1: TCP Baseline â€” finding all live endpoints (not timed, no load)...")
     from cores.scanner import run_tcp_scan
 
     tcp_results = await run_tcp_scan(
@@ -946,7 +946,7 @@ async def run():
 
     print(f"[+] TCP Baseline: {len(baseline_eps)} live endpoints.")
 
-    # ── Gateway baseline ───────────────────────────────────────────────────────
+    # â”€â”€ Gateway baseline â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     gateway = _find_default_gateway()
     if gateway:
         print(f"[*] Local gateway detected: {gateway}")
@@ -962,7 +962,7 @@ async def run():
     print("\n[*] Resting 5s before tuning...")
     await asyncio.sleep(5)
 
-    # ── Scanner-specific probe functions ───────────────────────────────────────
+    # â”€â”€ Scanner-specific probe functions â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     async def probe_asyncio(rate: int, duration: float) -> ProbeStats:
         return await _sustained_tcp_probe(
             list(baseline_eps),   # only probe endpoints we KNOW are alive
@@ -980,7 +980,7 @@ async def run():
     async def probe_nmap(rate: int, duration: float) -> ProbeStats:
         return await _nmap_probe(sampled_ips, rate, duration, scan_type=nmap_scan_type)
 
-    # ── Tune each selected engine ──────────────────────────────────────────────
+    # â”€â”€ Tune each selected engine â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     if tune_asyncio:
         tuned_asyncio = await _adaptive_tune(
             "Asyncio Concurrency",

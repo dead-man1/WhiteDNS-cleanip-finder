@@ -1,4 +1,4 @@
-package nmap
+﻿package nmap
 
 import (
 	"fmt"
@@ -25,7 +25,7 @@ func Initialize() (string, error) {
 // extractNmap resolves a usable nmap executable path.
 // If a bundled binary is present in the future, it can be extracted here.
 func extractNmap() (string, error) {
-	if env := os.Getenv("WHITEPROXY_NMAP_PATH"); env != "" && fileExists(env) {
+	if env := os.Getenv("WHITEDNS_NMAP_PATH"); env != "" && fileExists(env) {
 		return env, nil
 	}
 	if path, err := exec.LookPath("nmap.exe"); err == nil {
@@ -35,7 +35,7 @@ func extractNmap() (string, error) {
 		return path, nil
 	}
 
-	return "", fmt.Errorf("nmap executable not found; install nmap or set WHITEPROXY_NMAP_PATH")
+	return "", fmt.Errorf("nmap executable not found; install nmap or set WHITEDNS_NMAP_PATH")
 }
 
 // GetPath returns the path to the nmap executable (initializes if needed)

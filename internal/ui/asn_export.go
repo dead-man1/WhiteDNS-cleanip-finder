@@ -1,4 +1,4 @@
-package ui
+﻿package ui
 
 import (
 	"bufio"
@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"whiteproxy-go/internal/asn"
+	"whitedns-go/internal/asn"
 )
 
 func defaultASNExportPath(dataDir string) string {

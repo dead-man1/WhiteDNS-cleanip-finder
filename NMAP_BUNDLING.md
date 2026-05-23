@@ -1,8 +1,8 @@
-# Bundling nmap into whiteproxy.exe
+﻿# Bundling nmap into whitedns.exe
 
 ## Overview
 
-This document explains how to bundle nmap directly into the whiteproxy executable so it's always available as an option without requiring a separate installation.
+This document explains how to bundle nmap directly into the whitedns executable so it's always available as an option without requiring a separate installation.
 
 ## Prerequisites
 
@@ -43,16 +43,16 @@ You can find these in your nmap installation directory (typically `C:\Program Fi
 
 ```
 go-port/
-├── internal/
-│   └── nmap/
-│       ├── bin/
-│       │   ├── nmap.exe
-│       │   ├── nmap-data/         (nmap database files)
-│       │   ├── libdnet.dll
-│       │   ├── libssh2.dll
-│       │   └── ...other DLLs
-│       ├── embed.go
-│       └── manager.go
+â”œâ”€â”€ internal/
+â”‚   â””â”€â”€ nmap/
+â”‚       â”œâ”€â”€ bin/
+â”‚       â”‚   â”œâ”€â”€ nmap.exe
+â”‚       â”‚   â”œâ”€â”€ nmap-data/         (nmap database files)
+â”‚       â”‚   â”œâ”€â”€ libdnet.dll
+â”‚       â”‚   â”œâ”€â”€ libssh2.dll
+â”‚       â”‚   â””â”€â”€ ...other DLLs
+â”‚       â”œâ”€â”€ embed.go
+â”‚       â””â”€â”€ manager.go
 ```
 
 ### 5. Update embed.go if necessary
@@ -75,44 +75,44 @@ And update the `extractNmap()` function in `manager.go` to extract all files.
 
 ```bash
 cd go-port
-go build -o whiteproxy.exe ./cmd/whiteproxy
+go build -o whitedns.exe ./cmd/whitedns
 ```
 
 ### 7. Verify nmap bundling
 
 Run the executable:
 ```bash
-whiteproxy.exe
+whitedns.exe
 ```
 
 On startup, you should see:
 ```
-[+] Bundled nmap initialized at: C:\Users\...\AppData\Local\Temp\whiteproxy-nmap\nmap.exe
+[+] Bundled nmap initialized at: C:\Users\...\AppData\Local\Temp\whitedns-nmap\nmap.exe
 ```
 
 ## How It Works
 
 1. **Embedding**: Go's `embed` package includes `nmap.exe` in the binary at compile time
-2. **Extraction**: When whiteproxy starts, it extracts nmap to a temporary directory
+2. **Extraction**: When whitedns starts, it extracts nmap to a temporary directory
 3. **Path Resolution**: Python code calls `nmap_resolver.get_nmap_executable()` which:
-   - Checks the `WHITEPROXY_NMAP_PATH` environment variable (set by Go on startup)
+   - Checks the `WHITEDNS_NMAP_PATH` environment variable (set by Go on startup)
    - Falls back to system `nmap` if bundled version isn't available
 4. **Execution**: The extracted nmap is executed for scans
 
 ## Advantages
 
-✅ **Single .exe file** - No separate nmap installation needed  
-✅ **Portable** - Works on any Windows machine  
-✅ **Automatic** - Bundled nmap is always available  
-✅ **Fallback** - Still works with system nmap if bundled version fails  
-✅ **Clean** - Temporary files are cleaned up automatically
+âœ… **Single .exe file** - No separate nmap installation needed  
+âœ… **Portable** - Works on any Windows machine  
+âœ… **Automatic** - Bundled nmap is always available  
+âœ… **Fallback** - Still works with system nmap if bundled version fails  
+âœ… **Clean** - Temporary files are cleaned up automatically
 
 ## Troubleshooting
 
 ### "nmap.exe not found" error
 
 1. Verify the file exists: `go-port/internal/nmap/bin/nmap.exe`
-2. Rebuild: `go build -o whiteproxy.exe ./cmd/whiteproxy`
+2. Rebuild: `go build -o whitedns.exe ./cmd/whitedns`
 3. Check the startup log for extraction errors
 
 ### "command not found" during scan
@@ -120,7 +120,7 @@ On startup, you should see:
 This means the temporary directory permissions prevent execution. Try:
 ```bash
 # Run as administrator
-whiteproxy.exe
+whitedns.exe
 ```
 
 ### Size concerns
@@ -137,9 +137,9 @@ For cross-platform support (Linux, macOS):
 1. Create separate binaries for each platform:
    ```
    go-port/internal/nmap/bin/
-   ├── windows/nmap.exe
-   ├── linux/nmap
-   └── macos/nmap
+   â”œâ”€â”€ windows/nmap.exe
+   â”œâ”€â”€ linux/nmap
+   â””â”€â”€ macos/nmap
    ```
 
 2. Update `embed.go`:
@@ -154,4 +154,4 @@ For cross-platform support (Linux, macOS):
 
 - [Go embed package documentation](https://pkg.go.dev/embed)
 - [nmap official documentation](https://nmap.org/docs.html)
-- [WHITEPROXY Architecture](../README.md)
+- [WHITEDNS Architecture](../README.md)

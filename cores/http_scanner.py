@@ -1,10 +1,10 @@
-"""
-HTTP-Only Proxy Scanner — 3-Wave asyncio pipeline.
+﻿"""
+HTTP-Only Proxy Scanner â€” 3-Wave asyncio pipeline.
 
-Strictly isolated from the white-proxy routing engine: results are saved to
+Strictly isolated from the whitedns routing engine: results are saved to
 data/http_proxies.txt (export) and data/http_cache.txt (permanent cross-run
-cache). Neither file is read by route_manager.load_ip_pool() — those load
-scan_*.json + white_ips_cache.txt only — so verified HTTP proxies are
+cache). Neither file is read by route_manager.load_ip_pool() â€” those load
+scan_*.json + white_ips_cache.txt only â€” so verified HTTP proxies are
 harvest-only and never enter the routing pool.
 
 Pipeline (per-candidate task model with one asyncio.Semaphore per wave so a
@@ -14,7 +14,7 @@ slow Wave 3 verifier cannot bottleneck Wave 1's TCP fan-out):
   Wave 2  Proxy Awareness       cap  500   4s    raw absolute-URI GET, expect 200
   Wave 3  Content Fingerprint     cap  100   8s    GET http://example.com/,
                                                  require 200 + body contains
-                                                 "Example Domain" — proves the
+                                                 "Example Domain" â€” proves the
                                                  proxy actually forwarded the
                                                  request; admin panels return
                                                  their own HTML, never that.
@@ -40,7 +40,7 @@ from cores.ui_layout import (
     draw_header,
 )
 
-# ─── Defaults ──────────────────────────────────────────────────────────────
+# â”€â”€â”€ Defaults â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 DEFAULT_HTTP_PORTS = [80, 8080, 3128, 8000, 8888, 8118, 8081, 8123]
 EXTENDED_HTTP_PORTS = [
     80, 443, 8000, 8001, 8002, 8003, 8008, 8080, 8081, 8082, 8083, 8123,
@@ -60,7 +60,7 @@ W3_TIMEOUT = 8.0
 HTTP_PROXIES_FILE = "http_proxies.txt"
 HTTP_CACHE_FILE = "http_cache.txt"
 
-# Wave 2 — sent verbatim. We accept HTTP/1.0 200 or HTTP/1.1 200 in the head.
+# Wave 2 â€” sent verbatim. We accept HTTP/1.0 200 or HTTP/1.1 200 in the head.
 _W2_REQUEST = (
     b"GET http://example.com/ HTTP/1.1\r\n"
     b"Host: example.com\r\n"
@@ -68,10 +68,10 @@ _W2_REQUEST = (
 )
 _W2_OK_PREFIXES = (b"HTTP/1.1 200", b"HTTP/1.0 200")
 
-# Wave 3 — content fingerprint.
+# Wave 3 â€” content fingerprint.
 # We re-issue the example.com GET but read the full body and verify it
 # contains example.com's known page signature.  Admin panels, web apps,
-# and "200 to anything" servers serve their own HTML — they will never
+# and "200 to anything" servers serve their own HTML â€” they will never
 # contain "Example Domain", which is unique to example.com (maintained by
 # IANA since 2002, extraordinarily stable).  No TLS or CONNECT required,
 # so HTTP-only proxies are not penalised.
@@ -87,7 +87,7 @@ _W3_STATUS_OK = (b"HTTP/1.1 200", b"HTTP/1.0 200")
 _W3_SIGNATURE = b"Example Domain"
 
 
-# ─── Isolated cache manager ────────────────────────────────────────────────
+# â”€â”€â”€ Isolated cache manager â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 def load_http_cache():
     """Load the permanent HTTP-proxy cache as a set of (ip, port) tuples."""
     cache = set()
@@ -116,12 +116,12 @@ def save_to_http_cache(new_proxies):
 
 def _save_export(proxies):
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    body = f"# HTTP-Only Scanner — {ts}\n" + "".join(f"{p}\n" for p in sorted(proxies))
+    body = f"# HTTP-Only Scanner â€” {ts}\n" + "".join(f"{p}\n" for p in sorted(proxies))
     data_store.write_text(HTTP_PROXIES_FILE, body, encoding="utf-8")
     print_ok(f"Exported {len(proxies)} proxy(ies) to data/{HTTP_PROXIES_FILE}")
 
 
-# ─── Common helpers ────────────────────────────────────────────────────────
+# â”€â”€â”€ Common helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 def _safe_close(writer):
     if writer is None:
         return
@@ -153,7 +153,7 @@ def _expand_targets(raw_lines):
     return list(dict.fromkeys(ips))
 
 
-# ─── Wave 1: TCP Ping ──────────────────────────────────────────────────────
+# â”€â”€â”€ Wave 1: TCP Ping â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 async def _wave1_tcp(ip, port):
     writer = None
     try:
@@ -167,7 +167,7 @@ async def _wave1_tcp(ip, port):
         _safe_close(writer)
 
 
-# ─── Wave 2: Proxy Awareness ───────────────────────────────────────────────
+# â”€â”€â”€ Wave 2: Proxy Awareness â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 async def _wave2_proxy_aware(ip, port):
     writer = None
     try:
@@ -187,12 +187,12 @@ async def _wave2_proxy_aware(ip, port):
         _safe_close(writer)
 
 
-# ─── Wave 3: CONNECT + TLS Handshake ───────────────────────────────────────
+# â”€â”€â”€ Wave 3: CONNECT + TLS Handshake â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 async def _wave3_echo(ip, port):
     """
     Content-fingerprint verification: the proxy must forward the request to
     example.com and return its actual page body.  Servers that blindly return
-    200 to any request serve their own HTML — they will never contain
+    200 to any request serve their own HTML â€” they will never contain
     "Example Domain", which is unique to example.com (IANA, stable since 2002).
     No TLS or CONNECT required, so HTTP-only proxies are not penalised.
     """
@@ -233,13 +233,13 @@ async def _wave3_echo(ip, port):
         _safe_close(writer)
 
 
-# ─── Pipeline driver ───────────────────────────────────────────────────────
+# â”€â”€â”€ Pipeline driver â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 def _draw_status(state, total):
     """Render a single live status line covering all three waves."""
     completed = state["w1_done"]
     pct = (completed / total * 100) if total else 100.0
     filled = int(30 * completed / total) if total else 30
-    bar = "█" * filled + "─" * (30 - filled)
+    bar = "â–ˆ" * filled + "â”€" * (30 - filled)
     sys.stdout.write(
         f"\r [{bar}] {pct:5.1f}% "
         f"W1 {state['w1_pass']}/{state['w1_done']} "
@@ -342,7 +342,7 @@ async def _run_pipeline(
     return state["working"]
 
 
-# ─── Preflight (masscan/nmap) ──────────────────────────────────────────────
+# â”€â”€â”€ Preflight (masscan/nmap) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 def _run_preflight(method, ips, ports):
     """Run masscan/nmap with HTTP ports; restore TARGET_PORTS afterwards."""
     saved = list(config.TARGET_PORTS)
@@ -373,17 +373,17 @@ async def _gather_candidates(method, ips, http_ports):
     return list(set(found))
 
 
-# ─── Interactive entry ─────────────────────────────────────────────────────
+# â”€â”€â”€ Interactive entry â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 async def run():
     draw_header()
-    sep = color_text("══════════════════════════════════════════════════════════", "dim")
+    sep = color_text("â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•", "dim")
     print(sep)
     print(color_text("   HTTP-ONLY PROXY SCANNER  (3-Wave Pipeline)", "title"))
     print(sep)
-    print(f" {color_text('[!]', 'warn')} Results saved to data/{HTTP_PROXIES_FILE} only — NOT loaded into routing.")
+    print(f" {color_text('[!]', 'warn')} Results saved to data/{HTTP_PROXIES_FILE} only â€” NOT loaded into routing.")
     print()
 
-    # ── Source ──────────────────────────────────────────────────────────────
+    # â”€â”€ Source â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     print_section("SCAN SOURCE")
     print(" [1] Load IPs/CIDRs/ASNs from text file")
     print(" [2] Paste IPs/CIDRs/ASNs manually")
@@ -431,7 +431,7 @@ async def run():
         domains = list(config.CLOUDFLARE_CNAME_DOMAINS)
         print_hint(f"Mining {len(domains)} Cloudflare domains over {rounds} rounds...")
         for r in range(rounds):
-            sys.stdout.write(f"\r[*] Round {r+1}/{rounds} — IPs so far: {len(mined)}     ")
+            sys.stdout.write(f"\r[*] Round {r+1}/{rounds} â€” IPs so far: {len(mined)}     ")
             sys.stdout.flush()
             random.shuffle(domains)
             for domain in domains:
@@ -468,7 +468,7 @@ async def run():
         return
     print_ok(f"{len(ips)} unique IP(s) queued.")
 
-    # ── Ports ───────────────────────────────────────────────────────────────
+    # â”€â”€ Ports â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     print()
     print_section("TARGET PORTS")
     default_str = ", ".join(str(p) for p in DEFAULT_HTTP_PORTS)
@@ -489,7 +489,7 @@ async def run():
     else:
         http_ports = list(DEFAULT_HTTP_PORTS)
 
-    # ── Method ──────────────────────────────────────────────────────────────
+    # â”€â”€ Method â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     print()
     print_section("SCAN METHOD")
     has_masscan = shutil.which("masscan") is not None
@@ -505,25 +505,25 @@ async def run():
 
     total_eps = len(ips) * len(http_ports)
     rate_disp = config.TUNED_MASSCAN_RATE or 5000
-    print(f" [1] Asyncio direct    — {total_eps} probes ({len(ips)} IPs × {len(http_ports)} ports), no extra tools")
+    print(f" [1] Asyncio direct    â€” {total_eps} probes ({len(ips)} IPs Ã— {len(http_ports)} ports), no extra tools")
     if has_masscan:
         k = next(k for k, v in method_map.items() if v == "masscan")
-        print(f" [{k}] Masscan preflight  — {rate_disp} pps, then 3-wave verify")
+        print(f" [{k}] Masscan preflight  â€” {rate_disp} pps, then 3-wave verify")
     if has_nmap:
         k = next(k for k, v in method_map.items() if v == "nmap")
-        print(f" [{k}] Nmap preflight     — reliable port scan, then 3-wave verify")
+        print(f" [{k}] Nmap preflight     â€” reliable port scan, then 3-wave verify")
 
     method = method_map.get(input("\nChoice [Default 1]: ").strip(), "asyncio")
 
-    # ── Asyncio concurrency (only relevant for asyncio mode) ─────────────────
+    # â”€â”€ Asyncio concurrency (only relevant for asyncio mode) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     w1_cap, w2_cap, w3_cap = W1_CONCURRENCY, W2_CONCURRENCY, W3_CONCURRENCY
     if method == "asyncio":
         print()
         print_section("CONCURRENCY")
-        print(f" [1] Light      — W1=500  / W2=150 / W3=40  (low RAM/BW, slow networks)")
-        print(f" [2] Normal     — W1=2000 / W2=500 / W3=100  [Default]")
-        print(f" [3] Aggressive — W1=4000 / W2=1000 / W3=200 (fast, needs good uplink)")
-        print(f" [4] Custom     — enter values manually")
+        print(f" [1] Light      â€” W1=500  / W2=150 / W3=40  (low RAM/BW, slow networks)")
+        print(f" [2] Normal     â€” W1=2000 / W2=500 / W3=100  [Default]")
+        print(f" [3] Aggressive â€” W1=4000 / W2=1000 / W3=200 (fast, needs good uplink)")
+        print(f" [4] Custom     â€” enter values manually")
         conc = input("\nChoice [Default 2]: ").strip()
         if conc == "1":
             w1_cap, w2_cap, w3_cap = 500, 150, 40
@@ -537,10 +537,10 @@ async def run():
             w2_cap = int(w2_s) if w2_s.isdigit() and int(w2_s) > 0 else W2_CONCURRENCY
             w3_cap = int(w3_s) if w3_s.isdigit() and int(w3_s) > 0 else W3_CONCURRENCY
 
-    # ── Run ─────────────────────────────────────────────────────────────────
+    # â”€â”€ Run â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     helpers.clear_screen()
     draw_header()
-    print(color_text("   HTTP-ONLY SCANNER — RUNNING", "title"))
+    print(color_text("   HTTP-ONLY SCANNER â€” RUNNING", "title"))
     print(f" {color_text('Limits', 'dim')}: W1={w1_cap} ({W1_TIMEOUT}s) | "
           f"W2={w2_cap} ({W2_TIMEOUT}s) | W3={w3_cap} ({W3_TIMEOUT}s)")
     print()
@@ -563,7 +563,7 @@ async def run():
     except KeyboardInterrupt:
         print("\n\n[-] Scan interrupted.")
 
-    # ── Results ─────────────────────────────────────────────────────────────
+    # â”€â”€ Results â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     print()
     print(sep)
     print(color_text("   SCAN COMPLETE", "title"))
@@ -575,7 +575,7 @@ async def run():
         added = save_to_http_cache(working)
         if added:
             print_ok(f"Added {added} new proxy(ies) to permanent HTTP cache.")
-        print_hint("These proxies are NOT loaded into the routing pool — export only.")
+        print_hint("These proxies are NOT loaded into the routing pool â€” export only.")
     else:
         print_warn("No working HTTP proxies found in the scanned range.")
 

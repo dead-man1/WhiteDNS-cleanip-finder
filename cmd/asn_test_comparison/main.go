@@ -1,10 +1,10 @@
-package main
+﻿package main
 
 import (
 	"fmt"
 	"sort"
 
-	"whiteproxy-go/internal/asn"
+	"whitedns-go/internal/asn"
 )
 
 func main() {

@@ -1,4 +1,4 @@
-package main
+﻿package main
 
 import (
 	"context"
@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"time"
 
-	"whiteproxy-go/internal/scanner"
+	"whitedns-go/internal/scanner"
 )
 
 func main() {

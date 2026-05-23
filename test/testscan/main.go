@@ -1,11 +1,11 @@
-package main
+﻿package main
 
 import (
 	"context"
 	"fmt"
 	"time"
 
-	"whiteproxy-go/internal/scanner"
+	"whitedns-go/internal/scanner"
 )
 
 func main() {

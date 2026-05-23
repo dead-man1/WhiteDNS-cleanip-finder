@@ -1,4 +1,4 @@
-package storage
+﻿package storage
 
 import (
 	"encoding/json"
@@ -32,7 +32,7 @@ func InitPaths(dataDir string) error {
 		if err != nil {
 			dataDir = "."
 		} else {
-			dataDir = filepath.Join(homeDir, ".whiteproxy")
+			dataDir = filepath.Join(homeDir, ".whitedns")
 		}
 	}
 

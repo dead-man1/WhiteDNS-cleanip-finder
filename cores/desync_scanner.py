@@ -1,4 +1,4 @@
-import os
+﻿import os
 import sys
 import json
 import time
@@ -15,7 +15,7 @@ from utils.route_manager import verify_sni
 def draw_header():
     clear_screen()
     print("==================================================")
-    print(f"   WHITE PROXY SUITE - DESYNC SCANNER v{config.VERSION}")
+    print(f"   WHITEDNS SUITE - DESYNC SCANNER v{config.VERSION}")
     print("==================================================")
 
 async def run():
@@ -168,7 +168,7 @@ async def run():
             if completed % 10 == 0 or completed == total_tasks:
                 bar_len = 30
                 filled = int(bar_len * completed / total_tasks)
-                bar = '█' * filled + '-' * (bar_len - filled)
+                bar = 'â–ˆ' * filled + '-' * (bar_len - filled)
                 percent = (completed / total_tasks) * 100
                 sys.stdout.write(f"\r   [{bar}] {percent:.1f}% ({completed}/{total_tasks}) Verifying...")
                 sys.stdout.flush()
@@ -195,7 +195,7 @@ async def run():
 
     if valid_pairs_list:
         data_store.write_json("desync_pairs.json", valid_pairs_list, indent=4)
-        print("[✓] Saved to data/desync_pairs.json")
+        print("[âœ“] Saved to data/desync_pairs.json")
 
         print("\nTop working SNIs:")
         sorted_snis = sorted(valid_pairs_list.keys(), key=lambda k: len(valid_pairs_list[k]), reverse=True)

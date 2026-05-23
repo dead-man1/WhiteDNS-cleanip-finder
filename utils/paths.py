@@ -1,10 +1,10 @@
-import os
+﻿import os
 import re
 import sys
 from datetime import datetime
 
 
-APP_DIR_NAME = "white-proxy"
+APP_DIR_NAME = "whitedns"
 ENV_HOME = "WHITE_PROXY_HOME"
 ENV_DATA_DIR = "WHITE_PROXY_DATA_DIR"
 ENV_ARCHIVE_DIR = "WHITE_PROXY_ARCHIVE_DIR"

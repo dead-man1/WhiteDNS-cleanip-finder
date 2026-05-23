@@ -1,4 +1,4 @@
-# Cross-platform build script for whiteproxy
+﻿# Cross-platform build script for whitedns
 # Builds for: Windows (current), Linux AMD64, Linux ARM64, Termux (Android ARM64)
 
 param(
@@ -10,7 +10,7 @@ $ErrorActionPreference = "Stop"
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 
 # Run all build commands from the go-port directory so relative package paths
-# like ./cmd/whiteproxy resolve correctly even when the script is launched from
+# like ./cmd/whitedns resolve correctly even when the script is launched from
 # the repository root.
 Push-Location $ScriptDir
 try {
@@ -50,7 +50,7 @@ function Invoke-CrossPlatformBuild {
     $StartTime = Get-Date
     
     try {
-        $BuildCmd = "go build -o `"$OutputPath`" -ldflags=`"-s -w`" ./cmd/whiteproxy"
+        $BuildCmd = "go build -o `"$OutputPath`" -ldflags=`"-s -w`" ./cmd/whitedns"
         if ($VerboseOutput) {
             Write-Host "  Command: $BuildCmd" -ForegroundColor Gray
         }
@@ -97,15 +97,15 @@ function Invoke-CrossPlatformBuild {
 
 # Build configurations
 $Builds = @(
-    @{ OS = "windows"; Arch = "amd64"; OutputName = "whiteproxy-windows-amd64.exe"; Description = "Windows 64-bit (AMD64)" },
-    @{ OS = "linux"; Arch = "amd64"; OutputName = "whiteproxy-linux-amd64"; Description = "Linux 64-bit (AMD64)" },
-    @{ OS = "linux"; Arch = "arm64"; OutputName = "whiteproxy-linux-arm64"; Description = "Linux ARM64 (Raspberry Pi, servers)" },
-    @{ OS = "android"; Arch = "arm64"; OutputName = "whiteproxy-termux-arm64"; Description = "Termux/Android ARM64" }
+    @{ OS = "windows"; Arch = "amd64"; OutputName = "whitedns-windows-amd64.exe"; Description = "Windows 64-bit (AMD64)" },
+    @{ OS = "linux"; Arch = "amd64"; OutputName = "whitedns-linux-amd64"; Description = "Linux 64-bit (AMD64)" },
+    @{ OS = "linux"; Arch = "arm64"; OutputName = "whitedns-linux-arm64"; Description = "Linux ARM64 (Raspberry Pi, servers)" },
+    @{ OS = "android"; Arch = "arm64"; OutputName = "whitedns-termux-arm64"; Description = "Termux/Android ARM64" }
 )
 
 Write-Host @"
 ================================================================
-WHITEPROXY CROSS-PLATFORM BUILD SYSTEM
+WHITEDNS CROSS-PLATFORM BUILD SYSTEM
 ================================================================
 Target platforms: $($Builds.Count)
 Build directory: $BuildDir

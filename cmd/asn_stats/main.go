@@ -1,11 +1,11 @@
-package main
+﻿package main
 
 import (
 	"fmt"
 	"os"
 	"path/filepath"
 
-	"whiteproxy-go/internal/asn"
+	"whitedns-go/internal/asn"
 )
 
 func main() {

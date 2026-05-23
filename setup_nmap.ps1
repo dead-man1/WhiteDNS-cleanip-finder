@@ -1,4 +1,4 @@
-$ErrorActionPreference = "Stop"
+﻿$ErrorActionPreference = "Stop"
 
 $nmapPaths = @(
     "C:\Program Files (x86)\Nmap",
@@ -48,8 +48,8 @@ foreach ($path in $nmapPaths) {
         Write-Host "" -ForegroundColor Green
         Write-Host "Next steps:" -ForegroundColor Cyan
         Write-Host "  1. cd go-port" -ForegroundColor Gray
-        Write-Host "  2. go build -o whiteproxy.exe ./cmd/whiteproxy" -ForegroundColor Gray
-        Write-Host "  3. Run: .\whiteproxy.exe" -ForegroundColor Gray
+        Write-Host "  2. go build -o whitedns.exe ./cmd/whitedns" -ForegroundColor Gray
+        Write-Host "  3. Run: .\whitedns.exe" -ForegroundColor Gray
         Write-Host "" -ForegroundColor Gray
         
         $found = $true

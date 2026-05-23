@@ -1,4 +1,4 @@
-module whiteproxy-go
+module whitedns-go
 
 go 1.26
 

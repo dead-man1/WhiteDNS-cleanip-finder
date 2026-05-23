@@ -1,4 +1,4 @@
-package ui
+﻿package ui
 
 import (
 	"encoding/csv"
@@ -13,9 +13,9 @@ import (
 	"sync"
 	"time"
 
-	"whiteproxy-go/internal/mmdf"
-	"whiteproxy-go/internal/scanner"
-	"whiteproxy-go/internal/storage"
+	"whitedns-go/internal/mmdf"
+	"whitedns-go/internal/scanner"
+	"whitedns-go/internal/storage"
 
 	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/bubbles/spinner"
@@ -25,9 +25,9 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// ─────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 //  Message types
-// ─────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 type scanStartedMsg struct{}
 type scanProgressMsg struct {
@@ -57,9 +57,9 @@ type actionCompleteMsg struct {
 type errorMsg struct{ text string }
 type logMsg struct{ text string }
 
-// ─────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 //  Screen identifiers
-// ─────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const (
 	screenMenu              = "menu"
@@ -82,9 +82,9 @@ const (
 
 const maxAllowedConcurrency = 10000
 
-// ─────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 //  Data types
-// ─────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 type asnEntry struct {
 	Networks []string // All networks/CIDRs for this ASN
@@ -117,9 +117,9 @@ type portPreset struct {
 	ports string
 }
 
-// ─────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 //  Colour palette  (256-colour, works everywhere)
-// ─────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 var (
 	// Base colours
@@ -130,7 +130,7 @@ var (
 	cBright  = lipgloss.Color("255") // bright white
 
 	// Accent colours
-	cAccent  = lipgloss.Color("39")  // sky blue  – primary accent
+	cAccent  = lipgloss.Color("39")  // sky blue  â€“ primary accent
 	cGreen   = lipgloss.Color("77")  // mint green
 	cYellow  = lipgloss.Color("220") // amber
 	cOrange  = lipgloss.Color("214") // orange
@@ -143,7 +143,7 @@ var (
 	cBorderActive = lipgloss.Color("39")
 	cBorderAlt    = lipgloss.Color("141")
 
-	// ── Composed styles ──────────────────────────────
+	// â”€â”€ Composed styles â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 	sTitle = lipgloss.NewStyle().
 		Bold(true).Foreground(cMagenta)
@@ -177,9 +177,9 @@ var (
 	}
 )
 
-// ─────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 //  Model
-// ─────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 type tuiModel struct {
 	app    *App
@@ -243,9 +243,9 @@ type tuiModel struct {
 	typingEnabled bool
 }
 
-// ─────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 //  Constructor
-// ─────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 func NewTUI(a *App) *tuiModel {
 	ti := textinput.New()
@@ -328,9 +328,9 @@ func NewTUI(a *App) *tuiModel {
 	return m
 }
 
-// ─────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 //  ASN loader
-// ─────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 func (m *tuiModel) loadASNFile() {
 	asnFile := resolveASNCSVPath(m.app.DataDir)
@@ -437,20 +437,20 @@ func resolveASNCSVPath(dataDir string) string {
 	return filepath.Join("..", "IranASNs", "filtered_ipv4.csv")
 }
 
-// ─────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 //  Init
-// ─────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 func (m tuiModel) Init() tea.Cmd { return m.spinner.Tick }
 
-// ─────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 //  Update  (single dispatch)
-// ─────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
-	// ── Window resize ─────────────────────────
+	// â”€â”€ Window resize â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 	if ws, ok := msg.(tea.WindowSizeMsg); ok {
 		m.width = ws.Width
 		m.height = ws.Height
@@ -459,7 +459,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// ── Global keys ───────────────────────────
+	// â”€â”€ Global keys â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 	if k, ok := msg.(tea.KeyMsg); ok {
 		switch k.String() {
 		case "ctrl+c":
@@ -473,7 +473,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	// ── Completion messages ───────────────────
+	// â”€â”€ Completion messages â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 	switch v := msg.(type) {
 	case scanCompleteMsg:
 		return m.handleScanComplete(v)
@@ -505,7 +505,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case actionCompleteMsg:
 		return m.handleActionComplete(v)
 	case errorMsg:
-		m.setToast(sError.Render("✗ "+v.text), 5*time.Second)
+		m.setToast(sError.Render("âœ— "+v.text), 5*time.Second)
 		return m, nil
 	case logMsg:
 		m.appendTransferLogLineFromScanLog(v.text)
@@ -517,14 +517,14 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// ── Spinner tick ──────────────────────────
+	// â”€â”€ Spinner tick â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 	if _, ok := msg.(spinner.TickMsg); ok {
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
 		cmds = append(cmds, cmd)
 	}
 
-	// ── Screen-specific update ─────────────────
+	// â”€â”€ Screen-specific update â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 	var screenCmd tea.Cmd
 	switch m.screen {
 	case screenMenu:
@@ -565,9 +565,9 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
-// ─────────────────────────────────────────────
-//  View  — single full-terminal render
-// ─────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+//  View  â€” single full-terminal render
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 func (m tuiModel) View() string {
 	w, h := m.width, m.height
@@ -641,20 +641,20 @@ func (m tuiModel) View() string {
 	return strings.Join(out, "\n")
 }
 
-// ─────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 //  Screen renderers
-// ─────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 func (m tuiModel) viewMenu(w, h int) string {
 	inner := w - 6 // account for panel border+padding
 
-	// ── Title bar ────────────────────────────
+	// â”€â”€ Title bar â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 	titleBar := sTitle.Render("WHITEDNS v9.32") + "  " +
 		sDim.Render("developed by ashentajir") + "  " +
 		sDim.Render(fmt.Sprintf("port:%d  logs:%d  %s", m.app.Cfg.ProxyPort, len(m.logs), time.Now().Format("15:04:05")))
-	accentBar := lipgloss.NewStyle().Foreground(cAccent).Render(strings.Repeat("─", inner-1))
+	accentBar := lipgloss.NewStyle().Foreground(cAccent).Render(strings.Repeat("â”€", inner-1))
 
-	// ── Two-column menu ───────────────────────
+	// â”€â”€ Two-column menu â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 	half := (len(m.menu) + 1) / 2
 	colW := (inner - 4) / 2
 
@@ -662,7 +662,7 @@ func (m tuiModel) viewMenu(w, h int) string {
 	for i, item := range m.menu {
 		label := fmt.Sprintf("[%s] %s", item.key, item.label)
 		if len(label) > colW-2 {
-			label = label[:colW-3] + "…"
+			label = label[:colW-3] + "â€¦"
 		}
 		// Pad to column width BEFORE applying styles
 		paddedLabel := label + strings.Repeat(" ", colW-len([]rune(label)))
@@ -696,7 +696,7 @@ func (m tuiModel) viewMenu(w, h int) string {
 		sHeader.Render(" COMMANDS ") + "\n\n" + menuRows.String(),
 	)
 
-	// ── Activity log ──────────────────────────
+	// â”€â”€ Activity log â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 	logLines := m.recentLogs(5, inner-4)
 	logContent := sHeader.Render(" ACTIVITY LOG ") + "\n"
 	if len(logLines) == 0 {
@@ -706,8 +706,8 @@ func (m tuiModel) viewMenu(w, h int) string {
 	}
 	logPanel := panelStyle(cBorderAlt).Width(inner).Render(logContent)
 
-	// ── Help bar ──────────────────────────────
-	help := sDim.Render("↑↓/jk navigate  ·  Enter select  ·  q quit")
+	// â”€â”€ Help bar â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+	help := sDim.Render("â†‘â†“/jk navigate  Â·  Enter select  Â·  q quit")
 
 	var out strings.Builder
 	out.WriteString(titleBar + "\n")
@@ -721,7 +721,7 @@ func (m tuiModel) viewMenu(w, h int) string {
 	return out.String()
 }
 
-// ── Generic list screen helper ───────────────
+// â”€â”€ Generic list screen helper â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 func (m tuiModel) viewList(w, h int, title string, items []string, help string) string {
 	inner := w - 6
@@ -761,14 +761,14 @@ func (m tuiModel) viewList(w, h int, title string, items []string, help string) 
 func (m tuiModel) viewScanMode(w, h int) string {
 	label := strings.ToUpper(m.scanKind)
 	items := []string{
-		"📋  Select from IranASN file",
-		"📝  Paste targets (IPs/CIDRs)",
-		"⌨   Type targets manually",
+		"ðŸ“‹  Select from IranASN file",
+		"ðŸ“  Paste targets (IPs/CIDRs)",
+		"âŒ¨   Type targets manually",
 	}
 	return m.viewList(w, h,
-		fmt.Sprintf("SCAN MODE — %s", label),
+		fmt.Sprintf("SCAN MODE â€” %s", label),
 		items,
-		"↑↓ navigate  ·  Enter select  ·  Esc back",
+		"â†‘â†“ navigate  Â·  Enter select  Â·  Esc back",
 	)
 }
 
@@ -796,7 +796,7 @@ func (m tuiModel) viewSelectASN(w, h int) string {
 		e := m.asnFiltered[i]
 		checked := " "
 		if m.selectedItems[i] {
-			checked = "✓"
+			checked = "âœ“"
 		}
 		line := fmt.Sprintf("[%s] %-12s  %s", checked, e.ASN, e.ASName)
 		if len(line) > inner-4 {
@@ -821,9 +821,9 @@ func (m tuiModel) viewSelectASN(w, h int) string {
 			rows.String() + "\n" +
 			status,
 	)
-	helpText := "↑↓ navigate  ·  ; typing on/off  ·  TAB toggle  ·  Space toggle in selection mode  ·  /all select all  ·  Enter confirm  ·  Esc back"
+	helpText := "â†‘â†“ navigate  Â·  ; typing on/off  Â·  TAB toggle  Â·  Space toggle in selection mode  Â·  /all select all  Â·  Enter confirm  Â·  Esc back"
 	if m.operationType == "export_asn" {
-		helpText = "↑↓ navigate  ·  ; typing on/off  ·  TAB toggle  ·  Space toggle in selection mode  ·  /all select all  ·  Enter export  ·  Esc back"
+		helpText = "â†‘â†“ navigate  Â·  ; typing on/off  Â·  TAB toggle  Â·  Space toggle in selection mode  Â·  /all select all  Â·  Enter export  Â·  Esc back"
 	}
 	help := sDim.Render(helpText)
 	return panel + "\n\n" + help
@@ -836,7 +836,7 @@ func (m tuiModel) viewTypeTargets(w, h int) string {
 			sDim.Render("  IPs or CIDRs, space/newline separated\n\n") +
 			"  " + m.ti.View(),
 	)
-	return panel + "\n\n" + sDim.Render("Enter confirm  ·  Esc back")
+	return panel + "\n\n" + sDim.Render("Enter confirm  Â·  Esc back")
 }
 
 func (m tuiModel) viewReviewTargets(w, h int) string {
@@ -882,7 +882,7 @@ func (m tuiModel) viewReviewTargets(w, h int) string {
 	if len(stats.Invalid) > 0 && len(stats.Invalid) <= 5 {
 		invalidSection = "\n" + sWarn.Render("Skipped (invalid format):") + "\n"
 		for _, inv := range stats.Invalid {
-			invalidSection += fmt.Sprintf("  ✗  %s\n", inv)
+			invalidSection += fmt.Sprintf("  âœ—  %s\n", inv)
 		}
 	} else if len(stats.Invalid) > 5 {
 		invalidSection = fmt.Sprintf("\n%s (showing first 5 of %d)\n", sWarn.Render("Skipped (invalid format):"), len(stats.Invalid))
@@ -890,20 +890,20 @@ func (m tuiModel) viewReviewTargets(w, h int) string {
 			if i >= 5 {
 				break
 			}
-			invalidSection += fmt.Sprintf("  ✗  %s\n", inv)
+			invalidSection += fmt.Sprintf("  âœ—  %s\n", inv)
 		}
 	}
 
 	panel := panelStyle(cBorderActive).Width(inner).Render(
 		header + "\n" +
-			sDim.Render("─────────────────────────────────────────") + "\n" +
+			sDim.Render("â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€") + "\n" +
 			statsDisplay + "\n\n" +
 			sDim.Render("Targets:") + "\n" +
 			targetList +
 			invalidSection,
 	)
 
-	help := sDim.Render("↑↓ scroll  ·  Enter confirm  ·  Esc back to edit")
+	help := sDim.Render("â†‘â†“ scroll  Â·  Enter confirm  Â·  Esc back to edit")
 	return panel + "\n\n" + help
 }
 
@@ -915,7 +915,7 @@ func (m tuiModel) viewSelectPorts(w, h int) string {
 				sDim.Render("  e.g. 80,443,2053,2083,2087,2096,8443,8080-8090\n\n") +
 				"  " + m.ti.View(),
 		)
-		return panel + "\n\n" + sDim.Render("Enter confirm  ·  Esc back")
+		return panel + "\n\n" + sDim.Render("Enter confirm  Â·  Esc back")
 	}
 	inner := w - 6
 	visibleRows := h - 10
@@ -949,7 +949,7 @@ func (m tuiModel) viewSelectPorts(w, h int) string {
 
 		line := fmt.Sprintf("%-*s  %s", portColW, ports, desc)
 		if len([]rune(line)) > inner-4 {
-			line = string([]rune(line)[:inner-5]) + "…"
+			line = string([]rune(line)[:inner-5]) + "â€¦"
 		}
 
 		if i == m.cursor {
@@ -962,7 +962,7 @@ func (m tuiModel) viewSelectPorts(w, h int) string {
 	panel := panelStyle(cBorderActive).Width(inner).Render(
 		sHeader.Render(" SELECT PORTS ") + "\n\n" + rows.String(),
 	)
-	return panel + "\n\n" + sDim.Render("↑↓ navigate  ·  Enter select  ·  Esc back")
+	return panel + "\n\n" + sDim.Render("â†‘â†“ navigate  Â·  Enter select  Â·  Esc back")
 }
 
 func (m tuiModel) viewSelectMethod(w, h int) string {
@@ -971,13 +971,13 @@ func (m tuiModel) viewSelectMethod(w, h int) string {
 
 	// Add availability and fallback info
 	if !scanner.ToolAvailable("masscan") {
-		labels[1] += "  " + sWarn.Render("[unavailable→Direct]")
+		labels[1] += "  " + sWarn.Render("[unavailableâ†’Direct]")
 	}
 	if !scanner.ToolAvailable("nmap") {
-		labels[2] += "  " + sWarn.Render("[unavailable→Direct]")
+		labels[2] += "  " + sWarn.Render("[unavailableâ†’Direct]")
 	}
 
-	help := "↑↓ navigate  ·  Enter select  ·  Esc back"
+	help := "â†‘â†“ navigate  Â·  Enter select  Â·  Esc back"
 	if !scanner.ToolAvailable("masscan") || !scanner.ToolAvailable("nmap") {
 		help += "  [unavailable tools fall back to Direct]"
 	}
@@ -987,7 +987,7 @@ func (m tuiModel) viewSelectMethod(w, h int) string {
 
 func (m tuiModel) viewSelectConcurrency(w, h int) string {
 	return m.viewList(w, h, "CONCURRENCY", m.concurrencyOptions,
-		"↑↓ navigate  ·  Enter select  ·  Esc back",
+		"â†‘â†“ navigate  Â·  Enter select  Â·  Esc back",
 	)
 }
 
@@ -1047,10 +1047,10 @@ func (m tuiModel) viewScanning(w, h int) string {
 			}
 			localT := segF - float64(seg)
 			col := mix(gradientStops[seg], gradientStops[seg+1], localT)
-			left += lipgloss.NewStyle().Foreground(lipgloss.Color(col)).Render("█")
+			left += lipgloss.NewStyle().Foreground(lipgloss.Color(col)).Render("â–ˆ")
 		}
 	}
-	empty := sDim.Render(strings.Repeat("░", barW-filled))
+	empty := sDim.Render(strings.Repeat("â–‘", barW-filled))
 	bar := left + empty + "  " + sAccent.Render(fmt.Sprintf("%3d%%", int(progress*100)))
 
 	stats := fmt.Sprintf("  Processed: %s/%s   Found: %s   IPs: %s",
@@ -1113,7 +1113,7 @@ func (m tuiModel) viewScanning(w, h int) string {
 		if len(r) > inner-6 {
 			r = r[:inner-6]
 		}
-		liveRows.WriteString(sSuccess.Render("  ▸ "+r) + "\n")
+		liveRows.WriteString(sSuccess.Render("  â–¸ "+r) + "\n")
 	}
 
 	headerBlock := m.spinner.View() + "  " + sHeader.Render(" "+opLabel+" ") + "\n\n"
@@ -1129,7 +1129,7 @@ func (m tuiModel) viewScanning(w, h int) string {
 			sAccent.Render("  Live results:\n") + liveRows.String() + "\n" +
 			sHeader.Render(" ACTIVITY LOG ") + "\n" + logBlock,
 	)
-	return panel + "\n\n" + sDim.Render("p pause/resume  ·  s save  ·  c/q quit  ·  Esc back")
+	return panel + "\n\n" + sDim.Render("p pause/resume  Â·  s save  Â·  c/q quit  Â·  Esc back")
 }
 
 func scanETA(start time.Time, current, total int) string {
@@ -1165,9 +1165,9 @@ func (m tuiModel) viewScanResults(w, h int) string {
 
 	var body strings.Builder
 	if m.scanErr != nil {
-		body.WriteString(sError.Render("✗ "+m.scanErr.Error()) + "\n")
+		body.WriteString(sError.Render("âœ— "+m.scanErr.Error()) + "\n")
 	} else {
-		body.WriteString(sSuccess.Render(fmt.Sprintf("  ✓  Found %d results\n\n", len(m.scanResults))))
+		body.WriteString(sSuccess.Render(fmt.Sprintf("  âœ“  Found %d results\n\n", len(m.scanResults))))
 		start := m.cursor - visibleRows + 1
 		if start < 0 {
 			start = 0
@@ -1202,7 +1202,7 @@ func (m tuiModel) viewScanResults(w, h int) string {
 			if i == m.cursor {
 				body.WriteString(sSelected.Render(r) + "\n")
 			} else {
-				body.WriteString(sSuccess.Render("  ✓ "+r) + "\n")
+				body.WriteString(sSuccess.Render("  âœ“ "+r) + "\n")
 			}
 		}
 		if len(m.scanResults) > visibleRows {
@@ -1213,7 +1213,7 @@ func (m tuiModel) viewScanResults(w, h int) string {
 	panel := panelStyle(cBorderAlt).Width(inner).Render(
 		sHeader.Render(" "+strings.ToUpper(opLabel)+" ") + "\n\n" + body.String(),
 	)
-	return panel + "\n\n" + sDim.Render("↑↓ scroll  ·  s save  ·  Enter/q back to menu")
+	return panel + "\n\n" + sDim.Render("â†‘â†“ scroll  Â·  s save  Â·  Enter/q back to menu")
 }
 
 func (m tuiModel) viewManageRules(w, h int) string {
@@ -1227,7 +1227,7 @@ func (m tuiModel) viewManageRules(w, h int) string {
 			sHeader.Render(" ADD "+strings.ToUpper(ruleType)+" RULE ") + "\n\n" +
 				"  " + m.ti.View(),
 		)
-		return panel + "\n\n" + sDim.Render("Enter save  ·  Esc cancel")
+		return panel + "\n\n" + sDim.Render("Enter save  Â·  Esc cancel")
 	}
 
 	items := []string{
@@ -1243,7 +1243,7 @@ func (m tuiModel) viewManageRules(w, h int) string {
 	panel := panelStyle(cBorderActive).Width(inner).Render(
 		sHeader.Render(" MANAGE RULES ") + "\n\n" + rows.String(),
 	)
-	return panel + "\n\n" + sDim.Render("1-4 select  ·  Esc back")
+	return panel + "\n\n" + sDim.Render("1-4 select  Â·  Esc back")
 }
 
 func (m tuiModel) viewSimpleInput(w, h int, title, placeholder string) string {
@@ -1253,23 +1253,23 @@ func (m tuiModel) viewSimpleInput(w, h int, title, placeholder string) string {
 			sDim.Render("  "+placeholder+"\n\n") +
 			"  " + m.ti.View(),
 	)
-	return panel + "\n\n" + sDim.Render("Enter confirm  ·  Esc back")
+	return panel + "\n\n" + sDim.Render("Enter confirm  Â·  Esc back")
 }
 
 func (m tuiModel) viewForceReroute(w, h int) string {
 	inner := w - 6
 	var step string
 	if m.tiStep == 1 {
-		step = "Step 1/2 — enter domain"
+		step = "Step 1/2 â€” enter domain"
 	} else {
-		step = fmt.Sprintf("Step 2/2 — enter endpoint for %s", m.stepData["domain"])
+		step = fmt.Sprintf("Step 2/2 â€” enter endpoint for %s", m.stepData["domain"])
 	}
 	panel := panelStyle(cBorderActive).Width(inner).Render(
 		sHeader.Render(" FORCE REROUTE ") + "\n\n" +
 			sInfo.Render("  "+step+"\n\n") +
 			"  " + m.ti.View(),
 	)
-	return panel + "\n\n" + sDim.Render("Enter confirm  ·  Esc back")
+	return panel + "\n\n" + sDim.Render("Enter confirm  Â·  Esc back")
 }
 
 func (m tuiModel) viewSetProxyPort(w, h int) string {
@@ -1279,12 +1279,12 @@ func (m tuiModel) viewSetProxyPort(w, h int) string {
 			sInfo.Render(fmt.Sprintf("  Current port: %d\n\n", m.app.Cfg.ProxyPort)) +
 			"  " + m.ti.View(),
 	)
-	return panel + "\n\n" + sDim.Render("Enter confirm  ·  Esc back")
+	return panel + "\n\n" + sDim.Render("Enter confirm  Â·  Esc back")
 }
 
-// ─────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 //  Screen handlers
-// ─────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 func (m tuiModel) handleMenuScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
 	k, ok := msg.(tea.KeyMsg)
@@ -1344,27 +1344,27 @@ func (m tuiModel) activateMenuItem() (tuiModel, tea.Cmd) {
 		m.tiStep = 1
 	case "set_proxy_port":
 		m.pushScreen(screenSetProxyPort)
-		m.setupInput(fmt.Sprintf("Current %d — enter new port", m.app.Cfg.ProxyPort))
+		m.setupInput(fmt.Sprintf("Current %d â€” enter new port", m.app.Cfg.ProxyPort))
 	case "autotune":
 		m.setToast(sInfo.Render("Tip: use direct for <30 targets, masscan for large scans"), 5*time.Second)
 	case "install_mmdf_ca":
 		return m, m.cmdInstallMMDFCA()
 	case "desync_scanner":
-		m.addLog("Starting Desync Scanner…")
+		m.addLog("Starting Desync Scannerâ€¦")
 		return m, m.cmdBridgeAction("desync_scanner")
 	case "sni_scanner":
-		m.addLog("Starting SNI Scanner…")
+		m.addLog("Starting SNI Scannerâ€¦")
 		return m, m.cmdBridgeAction("sni_scanner")
 	case "configure_desync":
-		m.addLog("Configuring Desync…")
+		m.addLog("Configuring Desyncâ€¦")
 		return m, m.cmdBridgeAction("desync_strategies")
 	case "clear_cache":
 		m.app.Router.ClearAllRoutes()
 		m.app.Scanner.ClearCache()
 		m.addLog("Cache cleared")
-		m.setToast(sSuccess.Render("✓ Cache cleared"), 3*time.Second)
+		m.setToast(sSuccess.Render("âœ“ Cache cleared"), 3*time.Second)
 	case "start_proxy_white":
-		m.addLog("Starting proxy (white mode)…")
+		m.addLog("Starting proxy (white mode)â€¦")
 		return m, m.cmdStartProxy("white_ip")
 	case "exit":
 		return m, tea.Quit
@@ -1472,7 +1472,7 @@ func (m tuiModel) handleSelectASNScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
 			return m, nil
 		}
 		if len(m.selectedItems) == 0 {
-			m.setToast(sError.Render("✗ Select at least one ASN"), 3*time.Second)
+			m.setToast(sError.Render("âœ— Select at least one ASN"), 3*time.Second)
 			return m, nil
 		}
 		for idx := range m.selectedItems {
@@ -1487,10 +1487,10 @@ func (m tuiModel) handleSelectASNScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
 			path, count, err := exportASNTargetsToTXT(m.app.DataDir, m.scanConfig.ASNs, "")
 			if err != nil {
 				m.addLog(fmt.Sprintf("ASN export failed: %v", err))
-				m.setToast(sError.Render("✗ "+err.Error()), 5*time.Second)
+				m.setToast(sError.Render("âœ— "+err.Error()), 5*time.Second)
 			} else {
 				m.addLog(fmt.Sprintf("Exported %d IPs to %s", count, path))
-				m.setToast(sSuccess.Render(fmt.Sprintf("✓ Exported %d IPs", count)), 4*time.Second)
+				m.setToast(sSuccess.Render(fmt.Sprintf("âœ“ Exported %d IPs", count)), 4*time.Second)
 			}
 			m.goBack()
 			return m, nil
@@ -1518,7 +1518,7 @@ func (m *tuiModel) selectAllASNs() {
 	m.cursor = 0
 	m.ti.SetValue("")
 	if m.operationType == "export_asn" {
-		m.setToast(sSuccess.Render(fmt.Sprintf("✓ Selected all %d ASNs", len(m.asnList))), 3*time.Second)
+		m.setToast(sSuccess.Render(fmt.Sprintf("âœ“ Selected all %d ASNs", len(m.asnList))), 3*time.Second)
 	}
 }
 
@@ -1704,7 +1704,7 @@ func (m tuiModel) handleSelectMethodScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
 	case "enter":
 		methods := []string{"direct", "masscan", "nmap"}
 		m.scanConfig.Method = methods[m.cursor]
-		m.addLog(fmt.Sprintf("✓ Scan method: %s", strings.ToUpper(m.scanConfig.Method)))
+		m.addLog(fmt.Sprintf("âœ“ Scan method: %s", strings.ToUpper(m.scanConfig.Method)))
 
 		m.pushScreen(screenSelectConcurrency)
 		m.cursor = 1
@@ -1730,7 +1730,7 @@ func (m tuiModel) handleSelectConcurrencyScreen(msg tea.Msg) (tuiModel, tea.Cmd)
 	case "enter":
 		sel := vals[m.cursor]
 		if sel > maxAllowedConcurrency {
-			m.addLog(fmt.Sprintf("Requested concurrency %d exceeds max %d — capping to %d", sel, maxAllowedConcurrency, maxAllowedConcurrency))
+			m.addLog(fmt.Sprintf("Requested concurrency %d exceeds max %d â€” capping to %d", sel, maxAllowedConcurrency, maxAllowedConcurrency))
 			sel = maxAllowedConcurrency
 		}
 		m.scanConfig.Concurrency = sel
@@ -1774,7 +1774,7 @@ func (m tuiModel) handleScanningScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
 	if k, ok := msg.(tea.KeyMsg); ok {
 		switch k.String() {
 		case "c":
-			// Cancel — nothing to do without a context; just go back
+			// Cancel â€” nothing to do without a context; just go back
 			m.goBack()
 		case "q":
 			m.goBack()
@@ -1802,10 +1802,10 @@ func (m tuiModel) handleScanningScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
 			}
 			if path, err := saveScanOutputResults(m.app.DataDir, kind, m.scanResults); err != nil {
 				m.addLog(fmt.Sprintf("Failed to save scan output: %v", err))
-				m.setToast(sError.Render("✗ Save failed"), 3*time.Second)
+				m.setToast(sError.Render("âœ— Save failed"), 3*time.Second)
 			} else {
 				m.addLog(fmt.Sprintf("Saved scan output to %s", path))
-				m.setToast(sSuccess.Render("✓ Saved scan output"), 3*time.Second)
+				m.setToast(sSuccess.Render("âœ“ Saved scan output"), 3*time.Second)
 			}
 		}
 	}
@@ -1822,7 +1822,7 @@ func (m tuiModel) handleInstantConnectScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
 		}
 		m.ti.Blur()
 		m.addLog(fmt.Sprintf("Added %d endpoints", count))
-		m.setToast(sSuccess.Render(fmt.Sprintf("✓ Added %d endpoints", count)), 3*time.Second)
+		m.setToast(sSuccess.Render(fmt.Sprintf("âœ“ Added %d endpoints", count)), 3*time.Second)
 		m.goBack()
 		return m, nil
 	}
@@ -1840,10 +1840,10 @@ func (m tuiModel) handleManageRulesScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
 					action = "do_not_route"
 				}
 				if err := m.app.RuleEngine.AddRule("", pattern, action); err != nil {
-					m.setToast(sError.Render("✗ "+err.Error()), 4*time.Second)
+					m.setToast(sError.Render("âœ— "+err.Error()), 4*time.Second)
 				} else {
 					m.addLog(fmt.Sprintf("Added %s: %s", action, pattern))
-					m.setToast(sSuccess.Render("✓ Rule added"), 3*time.Second)
+					m.setToast(sSuccess.Render("âœ“ Rule added"), 3*time.Second)
 				}
 			}
 			m.ti.Blur()
@@ -1864,11 +1864,11 @@ func (m tuiModel) handleManageRulesScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
 			m.setupInput("Pattern for do_not_route")
 		case "3":
 			a, d := m.app.RuleEngine.GetAllRules()
-			m.addLog(fmt.Sprintf("Rules — always:%d  do_not:%d", len(a), len(d)))
+			m.addLog(fmt.Sprintf("Rules â€” always:%d  do_not:%d", len(a), len(d)))
 		case "4":
 			m.app.RuleEngine.ClearRules()
 			m.addLog("All rules cleared")
-			m.setToast(sSuccess.Render("✓ Rules cleared"), 3*time.Second)
+			m.setToast(sSuccess.Render("âœ“ Rules cleared"), 3*time.Second)
 		case "enter":
 			m.goBack()
 		}
@@ -1905,7 +1905,7 @@ func (m tuiModel) handleForceRerouteScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
 		}
 		domain := m.stepData["domain"]
 		m.app.Router.AddRouteToCache("reroute", raw, 600.0, true)
-		m.addLog(fmt.Sprintf("Rerouted %s → %s", domain, raw))
+		m.addLog(fmt.Sprintf("Rerouted %s â†’ %s", domain, raw))
 		m.stepData = make(map[string]string)
 		m.tiStep = 0
 		m.ti.Blur()
@@ -1921,12 +1921,12 @@ func (m tuiModel) handleSetProxyPortScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
 		raw := strings.TrimSpace(m.ti.Value())
 		port, err := strconv.Atoi(raw)
 		if err != nil || port < 1 || port > 65535 {
-			m.setToast(sError.Render("✗ Invalid port (1-65535)"), 3*time.Second)
+			m.setToast(sError.Render("âœ— Invalid port (1-65535)"), 3*time.Second)
 			return m, nil
 		}
 		m.app.Cfg.ProxyPort = port
 		m.addLog(fmt.Sprintf("Proxy port set to %d", port))
-		m.setToast(sSuccess.Render(fmt.Sprintf("✓ Port set to %d", port)), 4*time.Second)
+		m.setToast(sSuccess.Render(fmt.Sprintf("âœ“ Port set to %d", port)), 4*time.Second)
 		m.ti.Blur()
 		m.goBack()
 		return m, nil
@@ -1953,10 +1953,10 @@ func (m tuiModel) handleScanResultsScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
 			}
 			if path, err := saveScanOutputResults(m.app.DataDir, kind, m.scanResults); err != nil {
 				m.addLog(fmt.Sprintf("Failed to save scan output: %v", err))
-				m.setToast(sError.Render("✗ Save failed"), 3*time.Second)
+				m.setToast(sError.Render("âœ— Save failed"), 3*time.Second)
 			} else {
 				m.addLog(fmt.Sprintf("Saved scan output to %s", path))
-				m.setToast(sSuccess.Render("✓ Saved scan output"), 3*time.Second)
+				m.setToast(sSuccess.Render("âœ“ Saved scan output"), 3*time.Second)
 			}
 		case "enter", "q", "backspace":
 			m.screen = screenMenu
@@ -1967,9 +1967,9 @@ func (m tuiModel) handleScanResultsScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
 	return m, nil
 }
 
-// ─────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 //  Completion handlers
-// ─────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 func (m tuiModel) handleScanComplete(msg scanCompleteMsg) (tuiModel, tea.Cmd) {
 	m.scanResults = msg.proxies
@@ -1993,7 +1993,7 @@ func (m tuiModel) handleScanComplete(msg scanCompleteMsg) (tuiModel, tea.Cmd) {
 	m.appendNewScanResultsToFile()
 	if msg.err != nil {
 		m.addLog(fmt.Sprintf("Scan failed: %v", msg.err))
-		m.setToast(sError.Render("✗ "+msg.err.Error()), 5*time.Second)
+		m.setToast(sError.Render("âœ— "+msg.err.Error()), 5*time.Second)
 		m.screen = screenMenu
 	} else {
 		dur := msg.duration
@@ -2001,7 +2001,7 @@ func (m tuiModel) handleScanComplete(msg scanCompleteMsg) (tuiModel, tea.Cmd) {
 			dur = time.Since(m.scanStartTime).Round(time.Second)
 		}
 		m.addLog(fmt.Sprintf("Scan done: %d proxies in %s", len(msg.proxies), dur))
-		m.setToast(sSuccess.Render(fmt.Sprintf("✓ Found %d proxies", len(msg.proxies))), 3*time.Second)
+		m.setToast(sSuccess.Render(fmt.Sprintf("âœ“ Found %d proxies", len(msg.proxies))), 3*time.Second)
 		m.screen = screenScanResults
 		m.cursor = 0
 	}
@@ -2051,11 +2051,11 @@ func (m tuiModel) handlePoolOperationComplete(msg poolOperationCompleteMsg) (tui
 	m.appendNewScanResultsToFile()
 	if msg.err != nil {
 		m.addLog(fmt.Sprintf("%s failed: %v", msg.operationType, msg.err))
-		m.setToast(sError.Render("✗ "+msg.err.Error()), 5*time.Second)
+		m.setToast(sError.Render("âœ— "+msg.err.Error()), 5*time.Second)
 		m.screen = screenMenu
 	} else {
 		m.addLog(fmt.Sprintf("%s done: %d items", msg.operationType, len(msg.results)))
-		m.setToast(sSuccess.Render(fmt.Sprintf("✓ %s complete", msg.operationType)), 3*time.Second)
+		m.setToast(sSuccess.Render(fmt.Sprintf("âœ“ %s complete", msg.operationType)), 3*time.Second)
 		m.screen = screenScanResults
 		m.cursor = 0
 	}
@@ -2065,17 +2065,17 @@ func (m tuiModel) handlePoolOperationComplete(msg poolOperationCompleteMsg) (tui
 func (m tuiModel) handleActionComplete(msg actionCompleteMsg) (tuiModel, tea.Cmd) {
 	if msg.err != nil {
 		m.addLog(fmt.Sprintf("%s failed: %v", msg.title, msg.err))
-		m.setToast(sError.Render("✗ "+msg.err.Error()), 5*time.Second)
+		m.setToast(sError.Render("âœ— "+msg.err.Error()), 5*time.Second)
 	} else {
 		m.addLog(fmt.Sprintf("%s: %s", msg.title, msg.text))
-		m.setToast(sSuccess.Render("✓ "+msg.text), 4*time.Second)
+		m.setToast(sSuccess.Render("âœ“ "+msg.text), 4*time.Second)
 	}
 	return m, nil
 }
 
-// ─────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 //  Command factories
-// ─────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 func (m tuiModel) cmdScanWithConfig(targets []string, cfg scanConfig, scanKind string) tea.Cmd {
 	return func() tea.Msg {
@@ -2481,9 +2481,9 @@ func (m tuiModel) cmdBridgeAction(action string) tea.Cmd {
 	}
 }
 
-// ─────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 //  Helpers
-// ─────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 func (m *tuiModel) pushScreen(next string) {
 	m.prevScreen = m.screen
@@ -2653,7 +2653,7 @@ func (m *tuiModel) appendTransferLogLineFromScanLog(line string) {
 	if line == "" {
 		return
 	}
-	if !strings.Contains(line, "↓") && !strings.Contains(line, "↑") && !strings.Contains(line, "[telegram]") && !strings.Contains(line, "[chatgpt]") && !strings.Contains(line, "[instagram]") && !strings.Contains(line, "[workers]") && !strings.Contains(line, "[pages]") && !strings.Contains(line, "[psiphon]") {
+	if !strings.Contains(line, "â†“") && !strings.Contains(line, "â†‘") && !strings.Contains(line, "[telegram]") && !strings.Contains(line, "[chatgpt]") && !strings.Contains(line, "[instagram]") && !strings.Contains(line, "[workers]") && !strings.Contains(line, "[pages]") && !strings.Contains(line, "[psiphon]") {
 		return
 	}
 	m.transferLogMu.Lock()
@@ -2720,16 +2720,16 @@ func (m tuiModel) recentLogs(n, maxW int) []string {
 	for i := start; i < len(m.logs); i++ {
 		l := m.logs[i]
 		if len(l) > maxW {
-			l = l[:maxW-1] + "…"
+			l = l[:maxW-1] + "â€¦"
 		}
-		lines = append(lines, sDim.Render("  ▪ "+l))
+		lines = append(lines, sDim.Render("  â–ª "+l))
 	}
 	return lines
 }
 
-// ─────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 //  Port parser
-// ─────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 func parsePorts(portStr string) []int {
 	if portStr == "" {

@@ -1,4 +1,4 @@
-package mmdf
+﻿package mmdf
 
 import (
 	"crypto/rand"
@@ -19,10 +19,10 @@ import (
 )
 
 const (
-	CACommonName   = "WhiteProxy MMDF Root CA"
+	CACommonName   = "WhiteDNS MMDF Root CA"
 	CACertFilename = "mmdf_ca.crt"
 	CAKeyFilename  = "mmdf_ca.key"
-	NSSNickname    = "WhiteProxy MMDF CA"
+	NSSNickname    = "WhiteDNS MMDF CA"
 )
 
 type Status struct {
@@ -115,7 +115,7 @@ func generateCA(certPath, keyPath string) error {
 		SerialNumber: serial,
 		Subject: pkix.Name{
 			CommonName:   CACommonName,
-			Organization: []string{"WhiteProxy"},
+			Organization: []string{"WhiteDNS"},
 		},
 		NotBefore:             now.Add(-24 * time.Hour),
 		NotAfter:              now.AddDate(10, 0, 0),
@@ -194,10 +194,10 @@ func installMacOS(certPath string) (map[string]any, error) {
 func installLinux(certPath string) (map[string]any, error) {
 	locations := []struct{ dest, refresh string }{}
 	if _, err := os.Stat("/usr/local/share/ca-certificates"); err == nil {
-		locations = append(locations, struct{ dest, refresh string }{"/usr/local/share/ca-certificates/whiteproxy-mmdf-ca.crt", "update-ca-certificates"})
+		locations = append(locations, struct{ dest, refresh string }{"/usr/local/share/ca-certificates/whitedns-mmdf-ca.crt", "update-ca-certificates"})
 	}
 	if _, err := os.Stat("/etc/pki/ca-trust/source/anchors"); err == nil {
-		locations = append(locations, struct{ dest, refresh string }{"/etc/pki/ca-trust/source/anchors/whiteproxy-mmdf-ca.crt", "update-ca-trust"})
+		locations = append(locations, struct{ dest, refresh string }{"/etc/pki/ca-trust/source/anchors/whitedns-mmdf-ca.crt", "update-ca-trust"})
 	}
 	if len(locations) == 0 {
 		return map[string]any{"ok": false, "message": "No supported Linux trust-store location found."}, nil

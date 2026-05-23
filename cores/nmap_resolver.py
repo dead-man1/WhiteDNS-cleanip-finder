@@ -1,4 +1,4 @@
-"""
+﻿"""
 Nmap path resolver for bundled nmap executable.
 Tries bundled nmap first, falls back to system nmap.
 """
@@ -11,11 +11,11 @@ import sys
 def get_nmap_executable():
     """
     Get path to nmap executable.
-    Returns path from environment variable WHITEPROXY_NMAP_PATH if set,
+    Returns path from environment variable WHITEDNS_NMAP_PATH if set,
     otherwise searches for system nmap.
     """
     # Try environment variable set by Go application
-    bundled_nmap = os.environ.get("WHITEPROXY_NMAP_PATH")
+    bundled_nmap = os.environ.get("WHITEDNS_NMAP_PATH")
     if bundled_nmap and os.path.exists(bundled_nmap):
         return bundled_nmap
     
