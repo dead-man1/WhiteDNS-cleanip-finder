@@ -1,0 +1,2806 @@
+package ui
+
+import (
+	"encoding/csv"
+	"fmt"
+	"io"
+	"math"
+	"os"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"whiteproxy-go/internal/mmdf"
+	"whiteproxy-go/internal/scanner"
+	"whiteproxy-go/internal/storage"
+
+	"github.com/atotto/clipboard"
+	"github.com/charmbracelet/bubbles/spinner"
+	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/bubbles/viewport"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+)
+
+// ─────────────────────────────────────────────
+//  Message types
+// ─────────────────────────────────────────────
+
+type scanStartedMsg struct{}
+type scanProgressMsg struct {
+	current   int
+	total     int
+	hits      int
+	startTime time.Time
+	currentIP string
+	totalIPs  int
+}
+type scanCompleteMsg struct {
+	proxies  []string
+	err      error
+	duration time.Duration
+}
+type poolOperationCompleteMsg struct {
+	operationType string
+	results       []string
+	err           error
+	duration      time.Duration
+}
+type actionCompleteMsg struct {
+	title string
+	text  string
+	err   error
+}
+type errorMsg struct{ text string }
+type logMsg struct{ text string }
+
+// ─────────────────────────────────────────────
+//  Screen identifiers
+// ─────────────────────────────────────────────
+
+const (
+	screenMenu              = "menu"
+	screenScanMode          = "scan_mode"
+	screenSelectASN         = "select_asn"
+	screenTypeTargets       = "type_targets"
+	screenReviewTargets     = "review_targets"
+	screenSelectPorts       = "select_ports"
+	screenSelectMethod      = "select_scan_method"
+	screenSelectConcurrency = "select_concurrency"
+	screenScanning          = "scanning"
+	screenInstantConnect    = "instant_connect"
+	screenManageRules       = "manage_rules"
+	screenInspectIP         = "inspect_ip"
+	screenReloadPool        = "reload_pool"
+	screenForceReroute      = "force_reroute"
+	screenSetProxyPort      = "set_proxy_port"
+	screenScanResults       = "scan_results"
+)
+
+const maxAllowedConcurrency = 10000
+
+// ─────────────────────────────────────────────
+//  Data types
+// ─────────────────────────────────────────────
+
+type asnEntry struct {
+	Networks []string // All networks/CIDRs for this ASN
+	ASN      string
+	ASName   string
+	Type     string
+	ASDomain string
+}
+
+type scanConfig struct {
+	Mode                      string
+	Targets                   []string
+	ASNs                      []string
+	Ports                     []int
+	PortsString               string
+	Method                    string
+	FilterType                string
+	Concurrency               int
+	AdaptiveDomainConcurrency int
+}
+
+type menuItem struct {
+	key    string
+	label  string
+	action string
+}
+
+type portPreset struct {
+	label string
+	ports string
+}
+
+// ─────────────────────────────────────────────
+//  Colour palette  (256-colour, works everywhere)
+// ─────────────────────────────────────────────
+
+var (
+	// Base colours
+	cBase    = lipgloss.Color("235") // near-black bg
+	cSurface = lipgloss.Color("237") // panel bg
+	cMuted   = lipgloss.Color("241") // dim text
+	cText    = lipgloss.Color("252") // normal text
+	cBright  = lipgloss.Color("255") // bright white
+
+	// Accent colours
+	cAccent  = lipgloss.Color("39")  // sky blue  – primary accent
+	cGreen   = lipgloss.Color("77")  // mint green
+	cYellow  = lipgloss.Color("220") // amber
+	cOrange  = lipgloss.Color("214") // orange
+	cRed     = lipgloss.Color("203") // coral red
+	cPurple  = lipgloss.Color("141") // lavender
+	cMagenta = lipgloss.Color("205") // hot pink
+
+	// Border colours
+	cBorderNormal = lipgloss.Color("238")
+	cBorderActive = lipgloss.Color("39")
+	cBorderAlt    = lipgloss.Color("141")
+
+	// ── Composed styles ──────────────────────────────
+
+	sTitle = lipgloss.NewStyle().
+		Bold(true).Foreground(cMagenta)
+
+	sHeader = lipgloss.NewStyle().
+		Bold(true).Foreground(cBright).Background(cAccent).
+		PaddingLeft(1).PaddingRight(1)
+
+	sDim = lipgloss.NewStyle().Foreground(cMuted)
+
+	sSelected = lipgloss.NewStyle().
+			Bold(true).Foreground(cBase).Background(cPurple).
+			PaddingLeft(1).PaddingRight(1)
+
+	sNormal = lipgloss.NewStyle().Foreground(cBright).PaddingLeft(2)
+
+	sSuccess = lipgloss.NewStyle().Bold(true).Foreground(cGreen)
+	sError   = lipgloss.NewStyle().Bold(true).Foreground(cRed)
+	sWarn    = lipgloss.NewStyle().Bold(true).Foreground(cOrange)
+	sInfo    = lipgloss.NewStyle().Foreground(cAccent)
+	sAccent  = lipgloss.NewStyle().Bold(true).Foreground(cYellow)
+	sPurple  = lipgloss.NewStyle().Foreground(cPurple)
+	sItem    = lipgloss.NewStyle().Foreground(cBright).PaddingLeft(1) // Changed to white for ASN text
+
+	// Panels
+	panelStyle = func(borderColor lipgloss.Color) lipgloss.Style {
+		return lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(borderColor).
+			Padding(0, 1)
+	}
+)
+
+// ─────────────────────────────────────────────
+//  Model
+// ─────────────────────────────────────────────
+
+type tuiModel struct {
+	app    *App
+	width  int
+	height int
+
+	screen        string
+	prevScreen    string
+	screenChanged bool // track if screen changed for selective clearing
+	cursor        int
+
+	menu    []menuItem
+	ti      textinput.Model
+	spinner spinner.Model
+	vp      viewport.Model // for scrollable result lists
+
+	tiStep        int
+	logs          []string
+	operationType string
+	toast         string
+	toastExpiry   time.Time
+	stepData      map[string]string
+	scanConfig    scanConfig
+
+	asnList     []asnEntry
+	asnFiltered []asnEntry
+
+	portPresets        []portPreset
+	methodOptions      []string
+	concurrencyOptions []string
+	selectedItems      map[int]bool
+	scanKind           string
+
+	scanStartTime time.Time
+	scanProgress  int
+	scanTotal     int
+	scanHits      int
+	scanResults   []string
+	scanErr       error
+	scanMsgCh     chan tea.Msg
+	scanCurrentIP string
+	scanTotalIPs  int
+	scanLogPath   string
+	scanLogMu     *sync.Mutex
+	scanPaused    bool
+	transferLogPath string
+	transferLogMu   *sync.Mutex
+	// incremental scan output file (written as results are discovered)
+	scanOutputPath    string
+	scanOutputWritten map[string]bool
+	scanOutputMu      *sync.Mutex
+	// pasteConfirm: used to avoid immediate submission when pasting multi-line targets
+	pasteConfirm   bool
+	pasteConfirmAt time.Time
+	// lastEnterTime: track when last Enter was pressed to detect paste-generated Enters
+	lastEnterTime time.Time
+	// parsed target review state
+	parsedTargetStats   *scanner.ParseTargetStats
+	parsedTargetsScroll int
+	// typingEnabled controls whether keys are routed into the ASN search box.
+	typingEnabled bool
+}
+
+// ─────────────────────────────────────────────
+//  Constructor
+// ─────────────────────────────────────────────
+
+func NewTUI(a *App) *tuiModel {
+	ti := textinput.New()
+	ti.CharLimit = 1024
+	ti.Width = 60
+
+	sp := spinner.New()
+	sp.Spinner = spinner.Dot
+	sp.Style = lipgloss.NewStyle().Foreground(cYellow)
+
+	menu := []menuItem{
+		{key: "1", label: "Scan IPs", action: "scan_ips"},
+		{key: "2", label: "Scan HTTP Proxies", action: "scan"},
+		{key: "3", label: "Scan SOCKS5 Proxies", action: "scan_socks5"},
+		{key: "4", label: "Reload IP Pool", action: "reload_pool"},
+		{key: "5", label: "Manage IP Pool", action: "manage_pool"},
+		{key: "6", label: "Instant Connect", action: "instant_connect"},
+		{key: "7", label: "Force Reroute Domain", action: "force_reroute"},
+		{key: "8", label: "Inspect IPs (ASN)", action: "inspect_ip"},
+		{key: "9", label: "Export ASN IPs", action: "export_asn"},
+		{key: "a", label: "Manage Rules", action: "manage_rules"},
+		{key: "b", label: "Set Proxy Port", action: "set_proxy_port"},
+		{key: "c", label: "Autotune Scan Rates", action: "autotune"},
+		{key: "d", label: "Install MMDF CA", action: "install_mmdf_ca"},
+		{key: "e", label: "Desync Scanner", action: "desync_scanner"},
+		{key: "s", label: "SNI Scanner", action: "sni_scanner"},
+		{key: "n", label: "Configure Desync", action: "configure_desync"},
+		{key: "x", label: "Clear Cache", action: "clear_cache"},
+		{key: "w", label: "Start Proxy (White)", action: "start_proxy_white"},
+		{key: "0", label: "Exit", action: "exit"},
+	}
+
+	m := &tuiModel{
+		app:           a,
+		width:         80,
+		height:        24,
+		screen:        screenMenu,
+		menu:          menu,
+		ti:            ti,
+		spinner:       sp,
+		logs:          []string{},
+		operationType: "scan",
+		stepData:      make(map[string]string),
+		scanConfig:    scanConfig{Concurrency: 250},
+		portPresets: []portPreset{
+			{label: "80 - HTTP only", ports: "80"},
+			{label: "443 - HTTPS only", ports: "443"},
+			{label: "443,2053,2083,2087,2096,8443 - Cloudflare TLS", ports: "443,2053,2083,2087,2096,8443"},
+			{label: "80,443,2053,2083,2087,2096,8443 - Cloudflare HTTP/TLS", ports: "80,443,2053,2083,2087,2096,8443"},
+			{label: "80,443 - HTTP/HTTPS", ports: "80,443"},
+			{label: "80,443,8080 - Most common", ports: "80,443,8080"},
+			{label: "80,8080,3128 - HTTP proxies", ports: "80,8080,3128"},
+			{label: "443,8443 - HTTPS ports", ports: "443,8443"},
+			{label: "8000-8100 - Dev range", ports: "8000-8100"},
+			{label: "8080-8090 - Proxy range", ports: "8080-8090"},
+			{label: "3000-3500 - App servers", ports: "3000-3500"},
+			{label: "9000-9100 - Services", ports: "9000-9100"},
+			{label: "1080-1090 - SOCKS", ports: "1080-1090"},
+			{label: "8000,8001,8008,8080,8888 - Extended HTTP", ports: "8000,8001,8008,8080,8888"},
+			{label: "80,443,3128,8080,8118 - Scan preset", ports: "80,443,3128,8080,8118"},
+			{label: "80,443,2053,2083,2087,2096,8443 - Cloudflare scan", ports: "80,443,2053,2083,2087,2096,8443"},
+			{label: "80,443,3128,8000,8080,8888,8118,9000,9050,1080 - All common", ports: "80,443,3128,8000,8080,8888,8118,9000,9050,1080"},
+			{label: "1080-1090,3128,8080,8118,9050-9051 - Full SOCKS", ports: "1080-1090,3128,8080,8118,9050-9051"},
+			{label: "Custom - Type ports manually", ports: ""},
+		},
+		methodOptions:      []string{"Direct (fast, in-process)", "Masscan preflight", "Nmap preflight"},
+		concurrencyOptions: []string{"Low (50)", "Medium (250)", "High (500)", "Very High (1000)", "Max (2000)", "Extreme (5000)"},
+		selectedItems:      make(map[int]bool),
+		scanKind:           "http",
+		typingEnabled:      true,
+	}
+
+	// prepare incremental output tracking
+	m.scanOutputWritten = make(map[string]bool)
+	m.scanLogMu = &sync.Mutex{}
+	m.transferLogMu = &sync.Mutex{}
+	m.scanOutputMu = &sync.Mutex{}
+
+	m.loadASNFile()
+	return m
+}
+
+// ─────────────────────────────────────────────
+//  ASN loader
+// ─────────────────────────────────────────────
+
+func (m *tuiModel) loadASNFile() {
+	asnFile := resolveASNCSVPath(m.app.DataDir)
+	f, err := os.Open(asnFile)
+	if err != nil {
+		m.addLog(fmt.Sprintf("Warning: could not load ASN file: %v", err))
+		return
+	}
+	defer f.Close()
+
+	r := csv.NewReader(f)
+	r.Read() // skip header
+
+	// Group networks by ASN
+	asnMap := make(map[string]*asnEntry)
+	for {
+		rec, err := r.Read()
+		if err == io.EOF {
+			break
+		}
+		if err != nil || len(rec) < 9 {
+			continue
+		}
+		asn := rec[5]
+		network := rec[0]
+
+		if _, exists := asnMap[asn]; !exists {
+			asnMap[asn] = &asnEntry{
+				ASN:      asn,
+				ASName:   rec[6],
+				ASDomain: rec[7],
+				Type:     rec[8],
+				Networks: []string{},
+			}
+		}
+		asnMap[asn].Networks = append(asnMap[asn].Networks, network)
+	}
+
+	// Convert to sorted list
+	for _, entry := range asnMap {
+		sort.Strings(entry.Networks) // Sort networks within each ASN
+		m.asnList = append(m.asnList, *entry)
+	}
+	sort.Slice(m.asnList, func(i, j int) bool { return m.asnList[i].ASN < m.asnList[j].ASN })
+	m.asnFiltered = m.asnList
+}
+
+func resolveASNCSVPath(dataDir string) string {
+	// Build a list of roots to probe. We attempt dataDir, its parent,
+	// the executable directory, the working directory, and then walk
+	// upwards from those roots a few levels to handle installs where
+	// the data files are placed beside the executable or in a repo
+	// parent directory.
+	var roots []string
+	pushRoot := func(r string) {
+		if r == "" {
+			return
+		}
+		roots = append(roots, r)
+	}
+
+	pushRoot(dataDir)
+	pushRoot(filepath.Dir(dataDir))
+	if exePath, err := os.Executable(); err == nil {
+		pushRoot(filepath.Dir(exePath))
+	}
+	if wd, err := os.Getwd(); err == nil {
+		pushRoot(wd)
+	}
+
+	// Also include the repository root (two levels up from this source file)
+	// in case running from tree during development.
+	if srcRoot := filepath.Join(filepath.Dir("."), ".."); srcRoot != "" {
+		pushRoot(srcRoot)
+	}
+
+	// For each root, probe that root and up to 4 parent levels for IranASNs
+	// folder containing filtered_ipv4.csv.
+	probed := make(map[string]struct{})
+	for _, root := range roots {
+		cur := filepath.Clean(root)
+		for i := 0; i < 5; i++ {
+			candidate := filepath.Join(cur, "IranASNs", "filtered_ipv4.csv")
+			if _, ok := probed[candidate]; !ok {
+				probed[candidate] = struct{}{}
+				if _, err := os.Stat(candidate); err == nil {
+					return candidate
+				}
+			}
+			parent := filepath.Dir(cur)
+			if parent == cur || parent == "." || parent == string(filepath.Separator) {
+				break
+			}
+			cur = parent
+		}
+	}
+
+	// Last-resort: try the file next to dataDir even if it doesn't exist; this
+	// keeps previous behavior for callers expecting a path.
+	if dataDir != "" {
+		return filepath.Join(filepath.Dir(dataDir), "IranASNs", "filtered_ipv4.csv")
+	}
+	// Fallback to known relative path in repository root
+	return filepath.Join("..", "IranASNs", "filtered_ipv4.csv")
+}
+
+// ─────────────────────────────────────────────
+//  Init
+// ─────────────────────────────────────────────
+
+func (m tuiModel) Init() tea.Cmd { return m.spinner.Tick }
+
+// ─────────────────────────────────────────────
+//  Update  (single dispatch)
+// ─────────────────────────────────────────────
+
+func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmds []tea.Cmd
+
+	// ── Window resize ─────────────────────────
+	if ws, ok := msg.(tea.WindowSizeMsg); ok {
+		m.width = ws.Width
+		m.height = ws.Height
+		m.vp.Width = ws.Width - 4
+		m.vp.Height = ws.Height - 10
+		return m, nil
+	}
+
+	// ── Global keys ───────────────────────────
+	if k, ok := msg.(tea.KeyMsg); ok {
+		switch k.String() {
+		case "ctrl+c":
+			return m, tea.Quit
+		case "esc":
+			if m.screen != screenMenu {
+				m.goBack()
+				m.ti.Blur()
+				return m, nil
+			}
+		}
+	}
+
+	// ── Completion messages ───────────────────
+	switch v := msg.(type) {
+	case scanCompleteMsg:
+		return m.handleScanComplete(v)
+	case scanProgressMsg:
+		if v.total > 0 {
+			m.scanTotal = v.total
+		}
+		prevHits := m.scanHits
+		m.scanProgress = v.current
+		m.scanHits = v.hits
+		if m.scanStartTime.IsZero() {
+			m.scanStartTime = v.startTime
+		}
+		m.scanCurrentIP = v.currentIP
+		m.scanTotalIPs = v.totalIPs
+		m.writeScanLogLine(fmt.Sprintf("[PROGRESS] processed=%d/%d hits=%d current=%s totalIPs=%d", v.current, v.total, v.hits, v.currentIP, v.totalIPs))
+		if v.currentIP != "" && v.hits > prevHits {
+			if len(m.scanResults) == 0 || m.scanResults[len(m.scanResults)-1] != v.currentIP {
+				m.scanResults = append(m.scanResults, v.currentIP)
+			}
+		}
+		// Re-arm wait for next message so UI keeps consuming from the channel
+		if m.scanMsgCh != nil {
+			return m, waitForScanMessage(m.scanMsgCh)
+		}
+		return m, nil
+	case poolOperationCompleteMsg:
+		return m.handlePoolOperationComplete(v)
+	case actionCompleteMsg:
+		return m.handleActionComplete(v)
+	case errorMsg:
+		m.setToast(sError.Render("✗ "+v.text), 5*time.Second)
+		return m, nil
+	case logMsg:
+		m.appendTransferLogLineFromScanLog(v.text)
+		m.addLog(v.text)
+		// Re-arm wait for next message so UI keeps consuming from the channel
+		if m.scanMsgCh != nil {
+			return m, waitForScanMessage(m.scanMsgCh)
+		}
+		return m, nil
+	}
+
+	// ── Spinner tick ──────────────────────────
+	if _, ok := msg.(spinner.TickMsg); ok {
+		var cmd tea.Cmd
+		m.spinner, cmd = m.spinner.Update(msg)
+		cmds = append(cmds, cmd)
+	}
+
+	// ── Screen-specific update ─────────────────
+	var screenCmd tea.Cmd
+	switch m.screen {
+	case screenMenu:
+		m, screenCmd = m.handleMenuScreen(msg)
+	case screenScanMode:
+		m, screenCmd = m.handleScanModeScreen(msg)
+	case screenSelectASN:
+		m, screenCmd = m.handleSelectASNScreen(msg)
+	case screenTypeTargets:
+		m, screenCmd = m.handleTypeTargetsScreen(msg)
+	case screenReviewTargets:
+		m, screenCmd = m.handleReviewTargetsScreen(msg)
+	case screenSelectPorts:
+		m, screenCmd = m.handleSelectPortsScreen(msg)
+	case screenSelectMethod:
+		m, screenCmd = m.handleSelectMethodScreen(msg)
+	case screenSelectConcurrency:
+		m, screenCmd = m.handleSelectConcurrencyScreen(msg)
+	case screenScanning:
+		m, screenCmd = m.handleScanningScreen(msg)
+	case screenInstantConnect:
+		m, screenCmd = m.handleInstantConnectScreen(msg)
+	case screenManageRules:
+		m, screenCmd = m.handleManageRulesScreen(msg)
+	case screenInspectIP:
+		m, screenCmd = m.handleInspectIPScreen(msg)
+	case screenForceReroute:
+		m, screenCmd = m.handleForceRerouteScreen(msg)
+	case screenSetProxyPort:
+		m, screenCmd = m.handleSetProxyPortScreen(msg)
+	case screenScanResults:
+		m, screenCmd = m.handleScanResultsScreen(msg)
+	}
+	if screenCmd != nil {
+		cmds = append(cmds, screenCmd)
+	}
+
+	return m, tea.Batch(cmds...)
+}
+
+// ─────────────────────────────────────────────
+//  View  — single full-terminal render
+// ─────────────────────────────────────────────
+
+func (m tuiModel) View() string {
+	w, h := m.width, m.height
+	if w < 40 {
+		w = 40
+	}
+	if h < 10 {
+		h = 10
+	}
+
+	var body string
+	switch m.screen {
+	case screenMenu:
+		body = m.viewMenu(w, h)
+	case screenScanMode:
+		body = m.viewScanMode(w, h)
+	case screenSelectASN:
+		body = m.viewSelectASN(w, h)
+	case screenTypeTargets:
+		body = m.viewTypeTargets(w, h)
+	case screenReviewTargets:
+		body = m.viewReviewTargets(w, h)
+	case screenSelectPorts:
+		body = m.viewSelectPorts(w, h)
+	case screenSelectMethod:
+		body = m.viewSelectMethod(w, h)
+	case screenSelectConcurrency:
+		body = m.viewSelectConcurrency(w, h)
+	case screenScanning:
+		body = m.viewScanning(w, h)
+	case screenScanResults:
+		body = m.viewScanResults(w, h)
+	case screenManageRules:
+		body = m.viewManageRules(w, h)
+	case screenInstantConnect:
+		body = m.viewSimpleInput(w, h, "Instant Connect", "IP:port endpoints (space separated)")
+	case screenInspectIP:
+		body = m.viewSimpleInput(w, h, "Inspect IP", "Enter IP address")
+	case screenForceReroute:
+		body = m.viewForceReroute(w, h)
+	case screenSetProxyPort:
+		body = m.viewSetProxyPort(w, h)
+	default:
+		body = m.viewMenu(w, h)
+	}
+
+	// Full-frame paint: fill every row and column to prevent stale stacked content
+	// while preserving each line's existing lipgloss styles and colours.
+	blank := strings.Repeat(" ", w)
+	lines := strings.Split(body, "\n")
+	if len(lines) > h {
+		lines = lines[:h]
+	}
+	out := make([]string, 0, h)
+	for _, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			out = append(out, blank)
+			continue
+		}
+		lineWidth := lipgloss.Width(line)
+		if lineWidth < w {
+			line = line + strings.Repeat(" ", w-lineWidth)
+		} else if lineWidth > w {
+			line = lipgloss.NewStyle().MaxWidth(w).Render(line)
+		}
+		out = append(out, line)
+	}
+	for len(out) < h {
+		out = append(out, blank)
+	}
+	return strings.Join(out, "\n")
+}
+
+// ─────────────────────────────────────────────
+//  Screen renderers
+// ─────────────────────────────────────────────
+
+func (m tuiModel) viewMenu(w, h int) string {
+	inner := w - 6 // account for panel border+padding
+
+	// ── Title bar ────────────────────────────
+	titleBar := sTitle.Render("WHITEDNS v9.32") + "  " +
+		sDim.Render("developed by ashentajir") + "  " +
+		sDim.Render(fmt.Sprintf("port:%d  logs:%d  %s", m.app.Cfg.ProxyPort, len(m.logs), time.Now().Format("15:04:05")))
+	accentBar := lipgloss.NewStyle().Foreground(cAccent).Render(strings.Repeat("─", inner-1))
+
+	// ── Two-column menu ───────────────────────
+	half := (len(m.menu) + 1) / 2
+	colW := (inner - 4) / 2
+
+	var col1, col2 []string
+	for i, item := range m.menu {
+		label := fmt.Sprintf("[%s] %s", item.key, item.label)
+		if len(label) > colW-2 {
+			label = label[:colW-3] + "…"
+		}
+		// Pad to column width BEFORE applying styles
+		paddedLabel := label + strings.Repeat(" ", colW-len([]rune(label)))
+
+		var rendered string
+		if i == m.cursor {
+			rendered = sSelected.Render(paddedLabel)
+		} else {
+			rendered = sNormal.Render(paddedLabel)
+		}
+		if i < half {
+			col1 = append(col1, rendered)
+		} else {
+			col2 = append(col2, rendered)
+		}
+	}
+	// Equalize column lengths
+	for len(col1) < len(col2) {
+		col1 = append(col1, strings.Repeat(" ", colW+4)) // Account for style padding
+	}
+	for len(col2) < len(col1) {
+		col2 = append(col2, strings.Repeat(" ", colW+4))
+	}
+
+	var menuRows strings.Builder
+	for i := range col1 {
+		menuRows.WriteString(col1[i] + "  " + col2[i] + "\n")
+	}
+
+	menuPanel := panelStyle(cBorderActive).Width(inner).Render(
+		sHeader.Render(" COMMANDS ") + "\n\n" + menuRows.String(),
+	)
+
+	// ── Activity log ──────────────────────────
+	logLines := m.recentLogs(5, inner-4)
+	logContent := sHeader.Render(" ACTIVITY LOG ") + "\n"
+	if len(logLines) == 0 {
+		logContent += sDim.Render("  No activity yet")
+	} else {
+		logContent += strings.Join(logLines, "\n")
+	}
+	logPanel := panelStyle(cBorderAlt).Width(inner).Render(logContent)
+
+	// ── Help bar ──────────────────────────────
+	help := sDim.Render("↑↓/jk navigate  ·  Enter select  ·  q quit")
+
+	var out strings.Builder
+	out.WriteString(titleBar + "\n")
+	out.WriteString(accentBar + "\n\n")
+	out.WriteString(menuPanel + "\n\n")
+	out.WriteString(logPanel + "\n\n")
+	if m.toastActive() {
+		out.WriteString(m.toast + "\n")
+	}
+	out.WriteString(help)
+	return out.String()
+}
+
+// ── Generic list screen helper ───────────────
+
+func (m tuiModel) viewList(w, h int, title string, items []string, help string) string {
+	inner := w - 6
+	visibleRows := h - 10
+	if visibleRows < 3 {
+		visibleRows = 3
+	}
+
+	// scroll window around cursor
+	start := 0
+	if m.cursor >= visibleRows {
+		start = m.cursor - visibleRows + 1
+	}
+	end := start + visibleRows
+	if end > len(items) {
+		end = len(items)
+	}
+
+	var rows strings.Builder
+	for i := start; i < end; i++ {
+		if i == m.cursor {
+			rows.WriteString(sSelected.Render(items[i]) + "\n")
+		} else {
+			rows.WriteString(sNormal.Render(items[i]) + "\n")
+		}
+	}
+	if len(items) > visibleRows {
+		rows.WriteString(sDim.Render(fmt.Sprintf("  [%d/%d]", m.cursor+1, len(items))) + "\n")
+	}
+
+	panel := panelStyle(cBorderActive).Width(inner).Render(
+		sHeader.Render(" "+title+" ") + "\n\n" + rows.String(),
+	)
+	return panel + "\n\n" + sDim.Render(help)
+}
+
+func (m tuiModel) viewScanMode(w, h int) string {
+	label := strings.ToUpper(m.scanKind)
+	items := []string{
+		"📋  Select from IranASN file",
+		"📝  Paste targets (IPs/CIDRs)",
+		"⌨   Type targets manually",
+	}
+	return m.viewList(w, h,
+		fmt.Sprintf("SCAN MODE — %s", label),
+		items,
+		"↑↓ navigate  ·  Enter select  ·  Esc back",
+	)
+}
+
+func (m tuiModel) viewSelectASN(w, h int) string {
+	inner := w - 6
+	// Search bar always visible
+	searchBar := "  " + sDim.Render("Search: ") + m.ti.View()
+
+	visibleRows := h - 14
+	if visibleRows < 3 {
+		visibleRows = 3
+	}
+
+	start := 0
+	if m.cursor >= visibleRows {
+		start = m.cursor - visibleRows + 1
+	}
+	end := start + visibleRows
+	if end > len(m.asnFiltered) {
+		end = len(m.asnFiltered)
+	}
+
+	var rows strings.Builder
+	for i := start; i < end; i++ {
+		e := m.asnFiltered[i]
+		checked := " "
+		if m.selectedItems[i] {
+			checked = "✓"
+		}
+		line := fmt.Sprintf("[%s] %-12s  %s", checked, e.ASN, e.ASName)
+		if len(line) > inner-4 {
+			line = line[:inner-4]
+		}
+		if i == m.cursor {
+			rows.WriteString(sSelected.Render(line) + "\n")
+		} else {
+			// Use bright white for ASN text as requested
+			rows.WriteString(lipgloss.NewStyle().Foreground(cBright).PaddingLeft(1).Render(line) + "\n")
+		}
+	}
+
+	status := fmt.Sprintf("  %s  selected: %s",
+		sInfo.Render(fmt.Sprintf("%d available", len(m.asnFiltered))),
+		sAccent.Render(fmt.Sprintf("%d", len(m.selectedItems))),
+	)
+
+	panel := panelStyle(cBorderActive).Width(inner).Render(
+		sHeader.Render(" SELECT ASN NETWORKS ") + "\n\n" +
+			searchBar + "\n\n" +
+			rows.String() + "\n" +
+			status,
+	)
+	helpText := "↑↓ navigate  ·  ; typing on/off  ·  TAB toggle  ·  Space toggle in selection mode  ·  /all select all  ·  Enter confirm  ·  Esc back"
+	if m.operationType == "export_asn" {
+		helpText = "↑↓ navigate  ·  ; typing on/off  ·  TAB toggle  ·  Space toggle in selection mode  ·  /all select all  ·  Enter export  ·  Esc back"
+	}
+	help := sDim.Render(helpText)
+	return panel + "\n\n" + help
+}
+
+func (m tuiModel) viewTypeTargets(w, h int) string {
+	inner := w - 6
+	panel := panelStyle(cBorderActive).Width(inner).Render(
+		sHeader.Render(" ENTER TARGETS ") + "\n\n" +
+			sDim.Render("  IPs or CIDRs, space/newline separated\n\n") +
+			"  " + m.ti.View(),
+	)
+	return panel + "\n\n" + sDim.Render("Enter confirm  ·  Esc back")
+}
+
+func (m tuiModel) viewReviewTargets(w, h int) string {
+	if m.parsedTargetStats == nil || len(m.scanConfig.Targets) == 0 {
+		return "Error: No targets to review"
+	}
+
+	stats := m.parsedTargetStats
+	inner := w - 6
+	contentHeight := h - 13
+
+	// Build header with statistics
+	header := sHeader.Render(" REVIEW TARGETS ")
+	statsLine := fmt.Sprintf("Valid: %d  |  Invalid: %d  |  Total: %d",
+		len(stats.Valid), len(stats.Invalid), stats.Total)
+	statsDisplay := sAccent.Render(statsLine)
+
+	// Build targets list with scrolling and better spacing
+	var targetLines []string
+	start := m.parsedTargetsScroll
+	end := start + contentHeight - 4
+	if end > len(m.scanConfig.Targets) {
+		end = len(m.scanConfig.Targets)
+	}
+
+	// Add proper spacing between targets for readability
+	for i := start; i < end; i++ {
+		targetLines = append(targetLines, fmt.Sprintf("  %3d.  %s", i+1, m.scanConfig.Targets[i]))
+	}
+
+	// Join with extra line spacing for better readability
+	targetList := strings.Join(targetLines, "\n")
+
+	// Add scroll indicator
+	if len(m.scanConfig.Targets) > end {
+		remaining := len(m.scanConfig.Targets) - end
+		targetList += fmt.Sprintf("\n\n  %s (showing %d-%d of %d, scroll for more)",
+			sDim.Render(fmt.Sprintf("... %d more targets", remaining)), start+1, end, len(m.scanConfig.Targets))
+	}
+
+	// Invalid targets section (if any)
+	invalidSection := ""
+	if len(stats.Invalid) > 0 && len(stats.Invalid) <= 5 {
+		invalidSection = "\n" + sWarn.Render("Skipped (invalid format):") + "\n"
+		for _, inv := range stats.Invalid {
+			invalidSection += fmt.Sprintf("  ✗  %s\n", inv)
+		}
+	} else if len(stats.Invalid) > 5 {
+		invalidSection = fmt.Sprintf("\n%s (showing first 5 of %d)\n", sWarn.Render("Skipped (invalid format):"), len(stats.Invalid))
+		for i, inv := range stats.Invalid {
+			if i >= 5 {
+				break
+			}
+			invalidSection += fmt.Sprintf("  ✗  %s\n", inv)
+		}
+	}
+
+	panel := panelStyle(cBorderActive).Width(inner).Render(
+		header + "\n" +
+			sDim.Render("─────────────────────────────────────────") + "\n" +
+			statsDisplay + "\n\n" +
+			sDim.Render("Targets:") + "\n" +
+			targetList +
+			invalidSection,
+	)
+
+	help := sDim.Render("↑↓ scroll  ·  Enter confirm  ·  Esc back to edit")
+	return panel + "\n\n" + help
+}
+
+func (m tuiModel) viewSelectPorts(w, h int) string {
+	if m.tiStep == 1 {
+		inner := w - 6
+		panel := panelStyle(cBorderActive).Width(inner).Render(
+			sHeader.Render(" CUSTOM PORTS ") + "\n\n" +
+				sDim.Render("  e.g. 80,443,2053,2083,2087,2096,8443,8080-8090\n\n") +
+				"  " + m.ti.View(),
+		)
+		return panel + "\n\n" + sDim.Render("Enter confirm  ·  Esc back")
+	}
+	inner := w - 6
+	visibleRows := h - 10
+	if visibleRows < 3 {
+		visibleRows = 3
+	}
+
+	start := 0
+	if m.cursor >= visibleRows {
+		start = m.cursor - visibleRows + 1
+	}
+	end := start + visibleRows
+	if end > len(m.portPresets) {
+		end = len(m.portPresets)
+	}
+
+	portColW := inner / 2
+	if portColW < 18 {
+		portColW = 18
+	}
+
+	var rows strings.Builder
+	for i := start; i < end; i++ {
+		preset := m.portPresets[i]
+		parts := strings.SplitN(preset.label, " - ", 2)
+		ports := strings.TrimSpace(parts[0])
+		desc := ""
+		if len(parts) > 1 {
+			desc = strings.TrimSpace(parts[1])
+		}
+
+		line := fmt.Sprintf("%-*s  %s", portColW, ports, desc)
+		if len([]rune(line)) > inner-4 {
+			line = string([]rune(line)[:inner-5]) + "…"
+		}
+
+		if i == m.cursor {
+			rows.WriteString(sSelected.Render(line) + "\n")
+		} else {
+			rows.WriteString(sNormal.Render(line) + "\n")
+		}
+	}
+
+	panel := panelStyle(cBorderActive).Width(inner).Render(
+		sHeader.Render(" SELECT PORTS ") + "\n\n" + rows.String(),
+	)
+	return panel + "\n\n" + sDim.Render("↑↓ navigate  ·  Enter select  ·  Esc back")
+}
+
+func (m tuiModel) viewSelectMethod(w, h int) string {
+	labels := make([]string, len(m.methodOptions))
+	copy(labels, m.methodOptions)
+
+	// Add availability and fallback info
+	if !scanner.ToolAvailable("masscan") {
+		labels[1] += "  " + sWarn.Render("[unavailable→Direct]")
+	}
+	if !scanner.ToolAvailable("nmap") {
+		labels[2] += "  " + sWarn.Render("[unavailable→Direct]")
+	}
+
+	help := "↑↓ navigate  ·  Enter select  ·  Esc back"
+	if !scanner.ToolAvailable("masscan") || !scanner.ToolAvailable("nmap") {
+		help += "  [unavailable tools fall back to Direct]"
+	}
+
+	return m.viewList(w, h, "SCAN METHOD", labels, help)
+}
+
+func (m tuiModel) viewSelectConcurrency(w, h int) string {
+	return m.viewList(w, h, "CONCURRENCY", m.concurrencyOptions,
+		"↑↓ navigate  ·  Enter select  ·  Esc back",
+	)
+}
+
+func (m tuiModel) viewScanning(w, h int) string {
+	inner := w - 4 // slightly wider scan panel
+
+	opLabel := map[string]string{
+		"scan_ips":     "IP Scan",
+		"reload_pool":  "Pool Reload",
+		"inspect_pool": "Pool Inspect",
+	}[m.operationType]
+	if opLabel == "" {
+		opLabel = strings.ToUpper(m.scanKind) + " Proxy Scan"
+	}
+
+	// Progress bar
+	progress := 0.0
+	if m.scanTotal > 0 {
+		progress = float64(m.scanProgress) / float64(m.scanTotal)
+	}
+	barW := inner - 12
+	if barW < 10 {
+		barW = 10
+	}
+	filled := int(float64(barW) * progress)
+	// gradient: smooth interpolated hex gradient across filled width
+	gradientStops := []string{"#00d1ff", "#7fff00", "#ffb400", "#ff4081", "#8a2be2"}
+	// helper: interpolate between two hex colors
+	mix := func(c1, c2 string, t float64) string {
+		var r1, g1, b1 int
+		var r2, g2, b2 int
+		fmt.Sscanf(c1, "#%02x%02x%02x", &r1, &g1, &b1)
+		fmt.Sscanf(c2, "#%02x%02x%02x", &r2, &g2, &b2)
+		ri := int(float64(r1) + (float64(r2)-float64(r1))*t)
+		gi := int(float64(g1) + (float64(g2)-float64(g1))*t)
+		bi := int(float64(b1) + (float64(b2)-float64(b1))*t)
+		return fmt.Sprintf("#%02x%02x%02x", ri, gi, bi)
+	}
+
+	left := ""
+	if barW > 0 {
+		for i := 0; i < filled; i++ {
+			var t float64
+			if barW > 1 {
+				t = float64(i) / float64(barW-1)
+			} else {
+				t = 0
+			}
+			// map t across gradient stops
+			segF := t * float64(len(gradientStops)-1)
+			seg := int(math.Floor(segF))
+			if seg < 0 {
+				seg = 0
+			}
+			if seg >= len(gradientStops)-1 {
+				seg = len(gradientStops) - 2
+			}
+			localT := segF - float64(seg)
+			col := mix(gradientStops[seg], gradientStops[seg+1], localT)
+			left += lipgloss.NewStyle().Foreground(lipgloss.Color(col)).Render("█")
+		}
+	}
+	empty := sDim.Render(strings.Repeat("░", barW-filled))
+	bar := left + empty + "  " + sAccent.Render(fmt.Sprintf("%3d%%", int(progress*100)))
+
+	stats := fmt.Sprintf("  Processed: %s/%s   Found: %s   IPs: %s",
+		sInfo.Render(fmt.Sprintf("%d", m.scanProgress)),
+		sInfo.Render(fmt.Sprintf("%d", m.scanTotal)),
+		sSuccess.Render(fmt.Sprintf("%d", m.scanHits)),
+		sInfo.Render(fmt.Sprintf("%d", m.scanTotalIPs)),
+	)
+	if !m.scanStartTime.IsZero() {
+		stats += "   " + sDim.Render(fmt.Sprintf("elapsed %s", time.Since(m.scanStartTime).Round(time.Second)))
+		if eta := scanETA(m.scanStartTime, m.scanProgress, m.scanTotal); eta != "" {
+			stats += "   " + sDim.Render("eta "+eta)
+		}
+	}
+
+	// Current IP being scanned
+	currentIPLine := ""
+	if m.scanCurrentIP != "" {
+		currentIPLine = sDim.Render("  Scanning: ") + sPurple.Render(" "+m.scanCurrentIP)
+	}
+
+	// Ports being scanned (collapsed into ranges)
+	portLabel := ""
+	if len(m.scanConfig.Ports) > 0 {
+		portLabel = compressPorts(m.scanConfig.Ports)
+	} else {
+		ports := m.app.Scanner.GetTargetPorts()
+		if len(ports) > 0 {
+			portLabel = compressPorts(ports)
+		}
+	}
+
+	// Recent log lines
+	logRows := h / 4
+	if logRows < 5 {
+		logRows = 5
+	}
+	if logRows > 10 {
+		logRows = 10
+	}
+	logLines := m.recentLogs(logRows, inner-4)
+	logBlock := sDim.Render(strings.Join(logLines, "\n"))
+
+	// Live hits appear under the activity log so the progress area stays clean
+	var liveRows strings.Builder
+	n := len(m.scanResults)
+	liveCount := h / 8
+	if liveCount < 3 {
+		liveCount = 3
+	}
+	if liveCount > 6 {
+		liveCount = 6
+	}
+	start := n - liveCount
+	if start < 0 {
+		start = 0
+	}
+	for i := start; i < n; i++ {
+		r := m.scanResults[i]
+		if len(r) > inner-6 {
+			r = r[:inner-6]
+		}
+		liveRows.WriteString(sSuccess.Render("  ▸ "+r) + "\n")
+	}
+
+	headerBlock := m.spinner.View() + "  " + sHeader.Render(" "+opLabel+" ") + "\n\n"
+	metaBlock := "  " + bar + "\n" + stats + "\n"
+	if currentIPLine != "" {
+		metaBlock += currentIPLine + "\n"
+	}
+	if portLabel != "" {
+		metaBlock += sDim.Render("  Ports: ") + sPurple.Render(" "+portLabel) + "\n"
+	}
+	panel := panelStyle(cBorderActive).Width(inner).Render(
+		headerBlock + metaBlock + "\n" +
+			sAccent.Render("  Live results:\n") + liveRows.String() + "\n" +
+			sHeader.Render(" ACTIVITY LOG ") + "\n" + logBlock,
+	)
+	return panel + "\n\n" + sDim.Render("p pause/resume  ·  s save  ·  c/q quit  ·  Esc back")
+}
+
+func scanETA(start time.Time, current, total int) string {
+	if start.IsZero() || current <= 0 || total <= 0 || current >= total {
+		return ""
+	}
+	elapsed := time.Since(start)
+	if elapsed <= 0 {
+		return ""
+	}
+	remaining := time.Duration(float64(elapsed) * float64(total-current) / float64(current))
+	if remaining < 0 {
+		return ""
+	}
+	return remaining.Round(time.Second).String()
+}
+
+func (m tuiModel) viewScanResults(w, h int) string {
+	inner := w - 6
+	visibleRows := h - 12
+	if visibleRows < 3 {
+		visibleRows = 3
+	}
+
+	opLabel := map[string]string{
+		"scan_ips":     "IP Scan Results",
+		"reload_pool":  "Pool Reload",
+		"inspect_pool": "Pool Inspect",
+	}[m.operationType]
+	if opLabel == "" {
+		opLabel = "Scan Results"
+	}
+
+	var body strings.Builder
+	if m.scanErr != nil {
+		body.WriteString(sError.Render("✗ "+m.scanErr.Error()) + "\n")
+	} else {
+		body.WriteString(sSuccess.Render(fmt.Sprintf("  ✓  Found %d results\n\n", len(m.scanResults))))
+		start := m.cursor - visibleRows + 1
+		if start < 0 {
+			start = 0
+		}
+		end := start + visibleRows
+		if end > len(m.scanResults) {
+			end = len(m.scanResults)
+		}
+		// Determine display ports: prefer explicit scanConfig, then scanner targets, then sensible defaults
+		displayPorts := m.scanConfig.Ports
+		if len(displayPorts) == 0 {
+			displayPorts = m.app.Scanner.GetTargetPorts()
+		}
+		if len(displayPorts) == 0 {
+			displayPorts = []int{443, 2053, 2083, 2087, 2096, 8443}
+		}
+		// render port label as comma-separated list
+		var portStrs []string
+		for _, p := range displayPorts {
+			portStrs = append(portStrs, fmt.Sprintf("%d", p))
+		}
+		portLabel := strings.Join(portStrs, ",")
+
+		for i := start; i < end; i++ {
+			r := m.scanResults[i]
+			if !strings.Contains(r, ":") && len(portLabel) > 0 {
+				r = fmt.Sprintf("%s:%s", r, portLabel)
+			}
+			if len(r) > inner-6 {
+				r = r[:inner-6]
+			}
+			if i == m.cursor {
+				body.WriteString(sSelected.Render(r) + "\n")
+			} else {
+				body.WriteString(sSuccess.Render("  ✓ "+r) + "\n")
+			}
+		}
+		if len(m.scanResults) > visibleRows {
+			body.WriteString(sDim.Render(fmt.Sprintf("\n  [%d/%d]", m.cursor+1, len(m.scanResults))))
+		}
+	}
+
+	panel := panelStyle(cBorderAlt).Width(inner).Render(
+		sHeader.Render(" "+strings.ToUpper(opLabel)+" ") + "\n\n" + body.String(),
+	)
+	return panel + "\n\n" + sDim.Render("↑↓ scroll  ·  s save  ·  Enter/q back to menu")
+}
+
+func (m tuiModel) viewManageRules(w, h int) string {
+	inner := w - 6
+	if m.tiStep == 2 || m.tiStep == 3 {
+		ruleType := "always_route"
+		if m.tiStep == 3 {
+			ruleType = "do_not_route"
+		}
+		panel := panelStyle(cBorderActive).Width(inner).Render(
+			sHeader.Render(" ADD "+strings.ToUpper(ruleType)+" RULE ") + "\n\n" +
+				"  " + m.ti.View(),
+		)
+		return panel + "\n\n" + sDim.Render("Enter save  ·  Esc cancel")
+	}
+
+	items := []string{
+		"[1]  Add always_route rule",
+		"[2]  Add do_not_route rule",
+		"[3]  List rules (log)",
+		"[4]  Clear all rules",
+	}
+	var rows strings.Builder
+	for _, it := range items {
+		rows.WriteString(sNormal.Render(it) + "\n")
+	}
+	panel := panelStyle(cBorderActive).Width(inner).Render(
+		sHeader.Render(" MANAGE RULES ") + "\n\n" + rows.String(),
+	)
+	return panel + "\n\n" + sDim.Render("1-4 select  ·  Esc back")
+}
+
+func (m tuiModel) viewSimpleInput(w, h int, title, placeholder string) string {
+	inner := w - 6
+	panel := panelStyle(cBorderActive).Width(inner).Render(
+		sHeader.Render(" "+strings.ToUpper(title)+" ") + "\n\n" +
+			sDim.Render("  "+placeholder+"\n\n") +
+			"  " + m.ti.View(),
+	)
+	return panel + "\n\n" + sDim.Render("Enter confirm  ·  Esc back")
+}
+
+func (m tuiModel) viewForceReroute(w, h int) string {
+	inner := w - 6
+	var step string
+	if m.tiStep == 1 {
+		step = "Step 1/2 — enter domain"
+	} else {
+		step = fmt.Sprintf("Step 2/2 — enter endpoint for %s", m.stepData["domain"])
+	}
+	panel := panelStyle(cBorderActive).Width(inner).Render(
+		sHeader.Render(" FORCE REROUTE ") + "\n\n" +
+			sInfo.Render("  "+step+"\n\n") +
+			"  " + m.ti.View(),
+	)
+	return panel + "\n\n" + sDim.Render("Enter confirm  ·  Esc back")
+}
+
+func (m tuiModel) viewSetProxyPort(w, h int) string {
+	inner := w - 6
+	panel := panelStyle(cBorderActive).Width(inner).Render(
+		sHeader.Render(" SET PROXY PORT ") + "\n\n" +
+			sInfo.Render(fmt.Sprintf("  Current port: %d\n\n", m.app.Cfg.ProxyPort)) +
+			"  " + m.ti.View(),
+	)
+	return panel + "\n\n" + sDim.Render("Enter confirm  ·  Esc back")
+}
+
+// ─────────────────────────────────────────────
+//  Screen handlers
+// ─────────────────────────────────────────────
+
+func (m tuiModel) handleMenuScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
+	k, ok := msg.(tea.KeyMsg)
+	if !ok {
+		return m, nil
+	}
+	switch k.String() {
+	case "up", "k":
+		if m.cursor > 0 {
+			m.cursor--
+		}
+	case "down", "j":
+		if m.cursor < len(m.menu)-1 {
+			m.cursor++
+		}
+	case "q", "0":
+		return m, tea.Quit
+	case "enter":
+		return m.activateMenuItem()
+	}
+	return m, nil
+}
+
+func (m tuiModel) activateMenuItem() (tuiModel, tea.Cmd) {
+	item := m.menu[m.cursor]
+	switch item.action {
+	case "scan_ips":
+		m.gotoScanMode("scan_ips", "ipscan")
+	case "scan":
+		m.gotoScanMode("scan", "http")
+	case "scan_socks5":
+		m.gotoScanMode("scan", "socks5")
+	case "reload_pool":
+		m.pushScreen(screenSelectASN)
+		m.operationType = "reload_pool"
+		m.resetASNScreen("Search ASN for pool reload")
+	case "manage_pool":
+		return m, m.cmdManagePool()
+	case "instant_connect":
+		m.pushScreen(screenInstantConnect)
+		m.setupInput("Enter IP:port endpoints (space separated)")
+	case "force_reroute":
+		m.pushScreen(screenForceReroute)
+		m.tiStep = 1
+		m.setupInput("Enter domain")
+	case "inspect_ip":
+		m.pushScreen(screenSelectASN)
+		m.operationType = "inspect_pool"
+		m.resetASNScreen("Search ASN to inspect")
+	case "export_asn":
+		m.pushScreen(screenSelectASN)
+		m.operationType = "export_asn"
+		m.scanConfig.ASNs = nil
+		m.resetASNScreen("Search ASN to export")
+	case "manage_rules":
+		m.pushScreen(screenManageRules)
+		m.tiStep = 1
+	case "set_proxy_port":
+		m.pushScreen(screenSetProxyPort)
+		m.setupInput(fmt.Sprintf("Current %d — enter new port", m.app.Cfg.ProxyPort))
+	case "autotune":
+		m.setToast(sInfo.Render("Tip: use direct for <30 targets, masscan for large scans"), 5*time.Second)
+	case "install_mmdf_ca":
+		return m, m.cmdInstallMMDFCA()
+	case "desync_scanner":
+		m.addLog("Starting Desync Scanner…")
+		return m, m.cmdBridgeAction("desync_scanner")
+	case "sni_scanner":
+		m.addLog("Starting SNI Scanner…")
+		return m, m.cmdBridgeAction("sni_scanner")
+	case "configure_desync":
+		m.addLog("Configuring Desync…")
+		return m, m.cmdBridgeAction("desync_strategies")
+	case "clear_cache":
+		m.app.Router.ClearAllRoutes()
+		m.app.Scanner.ClearCache()
+		m.addLog("Cache cleared")
+		m.setToast(sSuccess.Render("✓ Cache cleared"), 3*time.Second)
+	case "start_proxy_white":
+		m.addLog("Starting proxy (white mode)…")
+		return m, m.cmdStartProxy("white_ip")
+	case "exit":
+		return m, tea.Quit
+	}
+	return m, nil
+}
+
+func (m tuiModel) handleScanModeScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
+	k, ok := msg.(tea.KeyMsg)
+	if !ok {
+		return m, nil
+	}
+	switch k.String() {
+	case "up", "k":
+		if m.cursor > 0 {
+			m.cursor--
+		}
+	case "down", "j":
+		if m.cursor < 2 {
+			m.cursor++
+		}
+	case "enter":
+		switch m.cursor {
+		case 0:
+			m.pushScreen(screenSelectASN)
+			m.scanConfig.Mode = "asn"
+			m.resetASNScreen("Search ASN")
+		case 1:
+			m.scanConfig.Mode = "paste"
+			m.pushScreen(screenTypeTargets)
+			m.setupInput("Paste targets (IPs/CIDRs, space or newline)")
+		case 2:
+			m.scanConfig.Mode = "type"
+			m.pushScreen(screenTypeTargets)
+			m.setupInput("Type targets (IPs/CIDRs, space or newline)")
+		}
+	}
+	return m, nil
+}
+
+func (m tuiModel) handleSelectASNScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
+	k, ok := msg.(tea.KeyMsg)
+	if ok {
+		switch k.String() {
+		case ";":
+			m.typingEnabled = !m.typingEnabled
+			if m.typingEnabled {
+				m.ti.Focus()
+			} else {
+				m.ti.Blur()
+			}
+			return m, nil
+		}
+	}
+
+	// Only route keys into the search box while typing is enabled.
+	if m.typingEnabled {
+		m.ti, _ = m.ti.Update(msg)
+	} else {
+		// Keep the input untouched while selection mode is active.
+		m.ti.Blur()
+	}
+	query := strings.ToLower(strings.TrimSpace(m.ti.Value()))
+	if query == "" {
+		m.asnFiltered = m.asnList
+	} else {
+		m.asnFiltered = nil
+		for _, e := range m.asnList {
+			if strings.Contains(strings.ToLower(e.ASName), query) ||
+				strings.Contains(strings.ToLower(e.ASN), query) {
+				m.asnFiltered = append(m.asnFiltered, e)
+			}
+		}
+	}
+	// clamp cursor
+	if m.cursor >= len(m.asnFiltered) {
+		m.cursor = len(m.asnFiltered) - 1
+	}
+	if m.cursor < 0 {
+		m.cursor = 0
+	}
+
+	switch k.String() {
+	case "up", "ctrl+p":
+		if m.cursor > 0 {
+			m.cursor--
+		}
+	case "down", "ctrl+n":
+		if m.cursor < len(m.asnFiltered)-1 {
+			m.cursor++
+		}
+	case "tab":
+		if m.cursor < len(m.asnFiltered) {
+			m.selectedItems[m.cursor] = !m.selectedItems[m.cursor]
+		}
+	case " ":
+		if !m.typingEnabled {
+			if m.cursor < len(m.asnFiltered) {
+				m.selectedItems[m.cursor] = !m.selectedItems[m.cursor]
+			}
+		}
+	case "enter":
+		if strings.EqualFold(strings.TrimSpace(m.ti.Value()), "/all") {
+			m.selectAllASNs()
+			return m, nil
+		}
+		if len(m.selectedItems) == 0 {
+			m.setToast(sError.Render("✗ Select at least one ASN"), 3*time.Second)
+			return m, nil
+		}
+		for idx := range m.selectedItems {
+			if idx < len(m.asnFiltered) {
+				// Add all networks for this ASN
+				m.scanConfig.ASNs = append(m.scanConfig.ASNs, m.asnFiltered[idx].Networks...)
+			}
+		}
+		m.addLog(fmt.Sprintf("Selected %d ASN networks", len(m.scanConfig.ASNs)))
+
+		if m.operationType == "export_asn" {
+			path, count, err := exportASNTargetsToTXT(m.app.DataDir, m.scanConfig.ASNs, "")
+			if err != nil {
+				m.addLog(fmt.Sprintf("ASN export failed: %v", err))
+				m.setToast(sError.Render("✗ "+err.Error()), 5*time.Second)
+			} else {
+				m.addLog(fmt.Sprintf("Exported %d IPs to %s", count, path))
+				m.setToast(sSuccess.Render(fmt.Sprintf("✓ Exported %d IPs", count)), 4*time.Second)
+			}
+			m.goBack()
+			return m, nil
+		}
+
+		if m.operationType == "reload_pool" || m.operationType == "inspect_pool" {
+			m.startOperation()
+			return m, m.cmdPoolOperation(m.operationType, m.scanConfig.ASNs)
+		}
+		m.pushScreen(screenSelectPorts)
+		m.cursor = 0
+	}
+	return m, nil
+}
+
+func (m *tuiModel) selectAllASNs() {
+	if len(m.asnList) == 0 {
+		return
+	}
+	m.selectedItems = make(map[int]bool, len(m.asnList))
+	for i := range m.asnList {
+		m.selectedItems[i] = true
+	}
+	m.asnFiltered = m.asnList
+	m.cursor = 0
+	m.ti.SetValue("")
+	if m.operationType == "export_asn" {
+		m.setToast(sSuccess.Render(fmt.Sprintf("✓ Selected all %d ASNs", len(m.asnList))), 3*time.Second)
+	}
+}
+
+func (m tuiModel) handleTypeTargetsScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
+	k, ok := msg.(tea.KeyMsg)
+	if ok && k.String() == "enter" {
+		raw := m.ti.Value()
+		// In paste mode, filter out rapid-fire Enters (from newlines in pasted content)
+		// Only real manual Enters (from user) should have >50ms gap
+		if m.scanConfig.Mode == "paste" {
+			now := time.Now()
+			if !m.lastEnterTime.IsZero() && now.Sub(m.lastEnterTime) < 50*time.Millisecond {
+				// This is likely a newline from the pasted content, ignore it
+				m.lastEnterTime = now
+				m.ti, _ = m.ti.Update(msg)
+				return m, nil
+			}
+			m.lastEnterTime = now
+		}
+
+		// In paste mode, require a confirmation Enter to avoid instant submission when pasting
+		if m.scanConfig.Mode == "paste" {
+			if !m.pasteConfirm {
+				m.pasteConfirm = true
+				m.pasteConfirmAt = time.Now()
+				m.setToast(sInfo.Render("Press Enter again to proceed with review"), 2*time.Second)
+				return m, nil
+			}
+			// if confirmation expired, treat this Enter as the first confirm again
+			if time.Since(m.pasteConfirmAt) > 10*time.Second {
+				m.pasteConfirmAt = time.Now()
+				m.setToast(sInfo.Render("Press Enter again to proceed with review"), 2*time.Second)
+				return m, nil
+			}
+			// proceed to review targets
+			m.pasteConfirm = false
+
+			if clipText, err := clipboard.ReadAll(); err == nil {
+				clipText = strings.TrimSpace(clipText)
+				if clipText != "" {
+					raw = clipText
+				}
+			}
+		}
+
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			m.goBack()
+			return m, nil
+		}
+
+		// Parse targets from raw input using robust parser
+		stats := scanner.ParseTargetsFromPaste(raw)
+		m.parsedTargetStats = &stats
+		m.parsedTargetsScroll = 0
+		m.cursor = 0
+
+		// Check if any valid targets were found
+		if len(stats.Valid) == 0 {
+			m.addLog("ERROR: No valid targets found in input")
+			m.setToast(sError.Render("No valid IPs/CIDRs found"), 3*time.Second)
+			return m, nil
+		}
+
+		// Set parsed targets
+		m.scanConfig.Targets = stats.Valid
+		m.scanConfig.ASNs = nil
+
+		// Navigate to review screen
+		m.pushScreen(screenReviewTargets)
+		m.ti.Blur()
+		return m, nil
+	}
+	m.ti, _ = m.ti.Update(msg)
+	return m, nil
+}
+
+func (m tuiModel) handleReviewTargetsScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
+	k, ok := msg.(tea.KeyMsg)
+	if !ok {
+		return m, nil
+	}
+
+	switch k.String() {
+	case "enter":
+		// Proceed to port selection
+		m.addLog(fmt.Sprintf("Confirmed %d targets (%d invalid skipped)", len(m.scanConfig.Targets), len(m.parsedTargetStats.Invalid)))
+		m.pushScreen(screenSelectPorts)
+		m.cursor = 0
+		return m, nil
+	case "esc":
+		// Go back to input
+		m.goBack()
+		return m, nil
+	case "up", "k":
+		if m.parsedTargetsScroll > 0 {
+			m.parsedTargetsScroll--
+		}
+		return m, nil
+	case "down", "j":
+		maxScroll := len(m.scanConfig.Targets) - 1
+		if maxScroll < 0 {
+			maxScroll = 0
+		}
+		if m.parsedTargetsScroll < maxScroll {
+			m.parsedTargetsScroll++
+		}
+		return m, nil
+	}
+	return m, nil
+}
+
+func (m tuiModel) handleSelectPortsScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
+	if m.tiStep == 1 {
+		k, ok := msg.(tea.KeyMsg)
+		if ok && k.String() == "enter" {
+			m.scanConfig.PortsString = strings.TrimSpace(m.ti.Value())
+			m.scanConfig.Ports = parsePorts(m.scanConfig.PortsString)
+			m.ti.Blur()
+			m.tiStep = 0
+			if m.operationType == "scan_ips" {
+				m.pushScreen(screenSelectConcurrency)
+			} else {
+				m.pushScreen(screenSelectMethod)
+			}
+			m.cursor = 0
+			return m, nil
+		}
+		m.ti, _ = m.ti.Update(msg)
+		return m, nil
+	}
+
+	k, ok := msg.(tea.KeyMsg)
+	if !ok {
+		return m, nil
+	}
+
+	switch k.String() {
+	case "up", "k":
+		if m.cursor > 0 {
+			m.cursor--
+		}
+	case "down", "j":
+		if m.cursor < len(m.portPresets)-1 {
+			m.cursor++
+		}
+	case "enter":
+		if m.cursor < len(m.portPresets) {
+			preset := m.portPresets[m.cursor]
+			if preset.ports == "" {
+				m.tiStep = 1
+				m.setupInput("Ports e.g. 80,443,2053,2083,2087,2096,8443,8080-8090")
+				return m, nil
+			}
+			m.scanConfig.PortsString = preset.ports
+			m.scanConfig.Ports = parsePorts(m.scanConfig.PortsString)
+		}
+		if m.operationType == "scan_ips" {
+			m.pushScreen(screenSelectConcurrency)
+			m.cursor = 1
+		} else {
+			m.pushScreen(screenSelectMethod)
+			m.cursor = 0
+		}
+	}
+	return m, nil
+}
+
+func (m tuiModel) handleSelectMethodScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
+	k, ok := msg.(tea.KeyMsg)
+	if !ok {
+		return m, nil
+	}
+	switch k.String() {
+	case "up", "k":
+		if m.cursor > 0 {
+			m.cursor--
+		}
+	case "down", "j":
+		if m.cursor < len(m.methodOptions)-1 {
+			m.cursor++
+		}
+	case "enter":
+		methods := []string{"direct", "masscan", "nmap"}
+		m.scanConfig.Method = methods[m.cursor]
+		m.addLog(fmt.Sprintf("✓ Scan method: %s", strings.ToUpper(m.scanConfig.Method)))
+
+		m.pushScreen(screenSelectConcurrency)
+		m.cursor = 1
+	}
+	return m, nil
+}
+
+func (m tuiModel) handleSelectConcurrencyScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
+	k, ok := msg.(tea.KeyMsg)
+	if !ok {
+		return m, nil
+	}
+	vals := []int{50, 250, 500, 1000, 2000, 5000}
+	switch k.String() {
+	case "up", "k":
+		if m.cursor > 0 {
+			m.cursor--
+		}
+	case "down", "j":
+		if m.cursor < len(m.concurrencyOptions)-1 {
+			m.cursor++
+		}
+	case "enter":
+		sel := vals[m.cursor]
+		if sel > maxAllowedConcurrency {
+			m.addLog(fmt.Sprintf("Requested concurrency %d exceeds max %d — capping to %d", sel, maxAllowedConcurrency, maxAllowedConcurrency))
+			sel = maxAllowedConcurrency
+		}
+		m.scanConfig.Concurrency = sel
+		m.addLog(fmt.Sprintf("Concurrency set to %d", m.scanConfig.Concurrency))
+		m.startOperation()
+
+		targets := m.scanConfig.ASNs
+		if len(targets) == 0 {
+			targets = m.scanConfig.Targets
+		}
+		ports := m.scanConfig.Ports
+		if len(ports) == 0 {
+			ports = parsePorts(m.scanConfig.PortsString)
+		}
+
+		if m.operationType == "scan_ips" {
+			endpointCount := len(targets) * len(ports)
+			timeout := scanTimeoutBudget(endpointCount)
+			m.startScanLogFile("ipscan", targets, ports, m.scanConfig.Concurrency, timeout)
+			m.app.Scanner.SetTargetPorts(ports)
+			m.scanMsgCh = make(chan tea.Msg, 65536)
+			m.addLog(fmt.Sprintf("Starting IP scan: targets=%d ports=%d concurrency=%d method=%s", len(targets), len(ports), m.scanConfig.Concurrency, strings.ToUpper(strings.TrimSpace(m.scanConfig.Method))))
+			m.addLog(fmt.Sprintf("Scan log file: %s", m.scanLogPath))
+			return m, m.cmdPoolOperation("scan_ips", targets)
+		}
+		timeout := time.Duration(6+m.scanConfig.Concurrency/500) * time.Second
+		if timeout > 30*time.Second {
+			timeout = 30 * time.Second
+		}
+		m.startScanLogFile(m.scanKind, targets, ports, m.scanConfig.Concurrency, timeout)
+		m.app.Scanner.SetTargetPorts(ports)
+		m.scanMsgCh = make(chan tea.Msg, 65536)
+		m.addLog(fmt.Sprintf("Starting proxy scan: targets=%d ports=%d concurrency=%d", len(targets), len(ports), m.scanConfig.Concurrency))
+		m.addLog(fmt.Sprintf("Scan log file: %s", m.scanLogPath))
+		return m, m.cmdProxyScan(targets, m.scanConfig, m.scanKind)
+	}
+	return m, nil
+}
+
+func (m tuiModel) handleScanningScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
+	if k, ok := msg.(tea.KeyMsg); ok {
+		switch k.String() {
+		case "c":
+			// Cancel — nothing to do without a context; just go back
+			m.goBack()
+		case "q":
+			m.goBack()
+		case "p":
+			// toggle pause
+			if m.scanPaused {
+				m.scanPaused = false
+				if m.app.Scanner != nil {
+					m.app.Scanner.Resume()
+				}
+				m.addLog("Scan resumed")
+				m.setToast(sSuccess.Render("Resumed"), 2*time.Second)
+			} else {
+				m.scanPaused = true
+				if m.app.Scanner != nil {
+					m.app.Scanner.Pause()
+				}
+				m.addLog("Scan paused")
+				m.setToast(sWarn.Render("Paused"), 2*time.Second)
+			}
+		case "s":
+			kind := m.operationType
+			if kind == "" {
+				kind = m.scanKind
+			}
+			if path, err := saveScanOutputResults(m.app.DataDir, kind, m.scanResults); err != nil {
+				m.addLog(fmt.Sprintf("Failed to save scan output: %v", err))
+				m.setToast(sError.Render("✗ Save failed"), 3*time.Second)
+			} else {
+				m.addLog(fmt.Sprintf("Saved scan output to %s", path))
+				m.setToast(sSuccess.Render("✓ Saved scan output"), 3*time.Second)
+			}
+		}
+	}
+	return m, nil
+}
+
+func (m tuiModel) handleInstantConnectScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
+	if k, ok := msg.(tea.KeyMsg); ok && k.String() == "enter" {
+		raw := strings.TrimSpace(m.ti.Value())
+		count := 0
+		for _, ep := range strings.Fields(raw) {
+			m.app.Router.AddRouteToCache("instant", ep, 700.0, true)
+			count++
+		}
+		m.ti.Blur()
+		m.addLog(fmt.Sprintf("Added %d endpoints", count))
+		m.setToast(sSuccess.Render(fmt.Sprintf("✓ Added %d endpoints", count)), 3*time.Second)
+		m.goBack()
+		return m, nil
+	}
+	m.ti, _ = m.ti.Update(msg)
+	return m, nil
+}
+
+func (m tuiModel) handleManageRulesScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
+	if m.tiStep == 2 || m.tiStep == 3 {
+		if k, ok := msg.(tea.KeyMsg); ok && k.String() == "enter" {
+			pattern := strings.TrimSpace(m.ti.Value())
+			if pattern != "" {
+				action := "always_route"
+				if m.tiStep == 3 {
+					action = "do_not_route"
+				}
+				if err := m.app.RuleEngine.AddRule("", pattern, action); err != nil {
+					m.setToast(sError.Render("✗ "+err.Error()), 4*time.Second)
+				} else {
+					m.addLog(fmt.Sprintf("Added %s: %s", action, pattern))
+					m.setToast(sSuccess.Render("✓ Rule added"), 3*time.Second)
+				}
+			}
+			m.ti.Blur()
+			m.tiStep = 1
+			return m, nil
+		}
+		m.ti, _ = m.ti.Update(msg)
+		return m, nil
+	}
+
+	if k, ok := msg.(tea.KeyMsg); ok {
+		switch k.String() {
+		case "1":
+			m.tiStep = 2
+			m.setupInput("Pattern for always_route")
+		case "2":
+			m.tiStep = 3
+			m.setupInput("Pattern for do_not_route")
+		case "3":
+			a, d := m.app.RuleEngine.GetAllRules()
+			m.addLog(fmt.Sprintf("Rules — always:%d  do_not:%d", len(a), len(d)))
+		case "4":
+			m.app.RuleEngine.ClearRules()
+			m.addLog("All rules cleared")
+			m.setToast(sSuccess.Render("✓ Rules cleared"), 3*time.Second)
+		case "enter":
+			m.goBack()
+		}
+	}
+	return m, nil
+}
+
+func (m tuiModel) handleInspectIPScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
+	if k, ok := msg.(tea.KeyMsg); ok && k.String() == "enter" {
+		raw := strings.TrimSpace(m.ti.Value())
+		if raw == "" {
+			m.goBack()
+			return m, nil
+		}
+		m.startOperation()
+		return m, m.cmdInspectIP(raw)
+	}
+	m.ti, _ = m.ti.Update(msg)
+	return m, nil
+}
+
+func (m tuiModel) handleForceRerouteScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
+	if k, ok := msg.(tea.KeyMsg); ok && k.String() == "enter" {
+		raw := strings.TrimSpace(m.ti.Value())
+		if raw == "" {
+			m.goBack()
+			return m, nil
+		}
+		if m.tiStep == 1 {
+			m.stepData["domain"] = raw
+			m.tiStep = 2
+			m.ti.SetValue("")
+			return m, nil
+		}
+		domain := m.stepData["domain"]
+		m.app.Router.AddRouteToCache("reroute", raw, 600.0, true)
+		m.addLog(fmt.Sprintf("Rerouted %s → %s", domain, raw))
+		m.stepData = make(map[string]string)
+		m.tiStep = 0
+		m.ti.Blur()
+		m.goBack()
+		return m, nil
+	}
+	m.ti, _ = m.ti.Update(msg)
+	return m, nil
+}
+
+func (m tuiModel) handleSetProxyPortScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
+	if k, ok := msg.(tea.KeyMsg); ok && k.String() == "enter" {
+		raw := strings.TrimSpace(m.ti.Value())
+		port, err := strconv.Atoi(raw)
+		if err != nil || port < 1 || port > 65535 {
+			m.setToast(sError.Render("✗ Invalid port (1-65535)"), 3*time.Second)
+			return m, nil
+		}
+		m.app.Cfg.ProxyPort = port
+		m.addLog(fmt.Sprintf("Proxy port set to %d", port))
+		m.setToast(sSuccess.Render(fmt.Sprintf("✓ Port set to %d", port)), 4*time.Second)
+		m.ti.Blur()
+		m.goBack()
+		return m, nil
+	}
+	m.ti, _ = m.ti.Update(msg)
+	return m, nil
+}
+
+func (m tuiModel) handleScanResultsScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
+	if k, ok := msg.(tea.KeyMsg); ok {
+		switch k.String() {
+		case "up", "k":
+			if m.cursor > 0 {
+				m.cursor--
+			}
+		case "down", "j":
+			if m.cursor < len(m.scanResults)-1 {
+				m.cursor++
+			}
+		case "s":
+			kind := m.operationType
+			if kind == "" {
+				kind = m.scanKind
+			}
+			if path, err := saveScanOutputResults(m.app.DataDir, kind, m.scanResults); err != nil {
+				m.addLog(fmt.Sprintf("Failed to save scan output: %v", err))
+				m.setToast(sError.Render("✗ Save failed"), 3*time.Second)
+			} else {
+				m.addLog(fmt.Sprintf("Saved scan output to %s", path))
+				m.setToast(sSuccess.Render("✓ Saved scan output"), 3*time.Second)
+			}
+		case "enter", "q", "backspace":
+			m.screen = screenMenu
+			m.scanResults = nil
+			m.cursor = 0
+		}
+	}
+	return m, nil
+}
+
+// ─────────────────────────────────────────────
+//  Completion handlers
+// ─────────────────────────────────────────────
+
+func (m tuiModel) handleScanComplete(msg scanCompleteMsg) (tuiModel, tea.Cmd) {
+	m.scanResults = msg.proxies
+	m.scanErr = msg.err
+	if m.scanTotal <= 0 {
+		m.scanTotal = 1
+	}
+	m.scanProgress = m.scanTotal
+	m.scanMsgCh = nil
+	if msg.err != nil {
+		m.writeScanLogLine(fmt.Sprintf("[COMPLETE] scan failed: %v", msg.err))
+	} else {
+		m.writeScanLogLine(fmt.Sprintf("[COMPLETE] scan done: %d proxies in %s", len(msg.proxies), msg.duration))
+		if path, err := saveScanOutputResults(m.app.DataDir, m.scanKind, m.scanResults); err != nil {
+			m.addLog(fmt.Sprintf("Failed to save scan output: %v", err))
+		} else {
+			m.addLog(fmt.Sprintf("Saved scan output to %s", path))
+		}
+	}
+	// append any newly discovered results to incremental output file
+	m.appendNewScanResultsToFile()
+	if msg.err != nil {
+		m.addLog(fmt.Sprintf("Scan failed: %v", msg.err))
+		m.setToast(sError.Render("✗ "+msg.err.Error()), 5*time.Second)
+		m.screen = screenMenu
+	} else {
+		dur := msg.duration
+		if dur == 0 && !m.scanStartTime.IsZero() {
+			dur = time.Since(m.scanStartTime).Round(time.Second)
+		}
+		m.addLog(fmt.Sprintf("Scan done: %d proxies in %s", len(msg.proxies), dur))
+		m.setToast(sSuccess.Render(fmt.Sprintf("✓ Found %d proxies", len(msg.proxies))), 3*time.Second)
+		m.screen = screenScanResults
+		m.cursor = 0
+	}
+	return m, nil
+}
+
+func (m tuiModel) handlePoolOperationComplete(msg poolOperationCompleteMsg) (tuiModel, tea.Cmd) {
+	if len(msg.results) > 0 {
+		seen := make(map[string]bool, len(m.scanResults)+len(msg.results))
+		merged := make([]string, 0, len(m.scanResults)+len(msg.results))
+		for _, result := range m.scanResults {
+			if !seen[result] {
+				seen[result] = true
+				merged = append(merged, result)
+			}
+		}
+		for _, result := range msg.results {
+			if !seen[result] {
+				seen[result] = true
+				merged = append(merged, result)
+			}
+		}
+		m.scanResults = merged
+	} else {
+		m.scanResults = msg.results
+	}
+	m.scanErr = msg.err
+	if m.scanTotal <= 0 {
+		m.scanTotal = 1
+	}
+	m.scanProgress = m.scanTotal
+	m.scanHits = len(m.scanResults)
+	m.scanMsgCh = nil
+	if msg.err != nil {
+		m.writeScanLogLine(fmt.Sprintf("[COMPLETE] %s failed: %v", msg.operationType, msg.err))
+	} else {
+		m.writeScanLogLine(fmt.Sprintf("[COMPLETE] %s done: %d items in %s", msg.operationType, len(m.scanResults), msg.duration))
+		if msg.operationType == "scan_ips" {
+			if path, err := saveScanOutputResults(m.app.DataDir, "ipscan", m.scanResults); err != nil {
+				m.addLog(fmt.Sprintf("Failed to save scan output: %v", err))
+			} else {
+				m.addLog(fmt.Sprintf("Saved scan output to %s", path))
+			}
+		}
+	}
+	// append any newly discovered results to incremental output file
+	m.appendNewScanResultsToFile()
+	if msg.err != nil {
+		m.addLog(fmt.Sprintf("%s failed: %v", msg.operationType, msg.err))
+		m.setToast(sError.Render("✗ "+msg.err.Error()), 5*time.Second)
+		m.screen = screenMenu
+	} else {
+		m.addLog(fmt.Sprintf("%s done: %d items", msg.operationType, len(msg.results)))
+		m.setToast(sSuccess.Render(fmt.Sprintf("✓ %s complete", msg.operationType)), 3*time.Second)
+		m.screen = screenScanResults
+		m.cursor = 0
+	}
+	return m, nil
+}
+
+func (m tuiModel) handleActionComplete(msg actionCompleteMsg) (tuiModel, tea.Cmd) {
+	if msg.err != nil {
+		m.addLog(fmt.Sprintf("%s failed: %v", msg.title, msg.err))
+		m.setToast(sError.Render("✗ "+msg.err.Error()), 5*time.Second)
+	} else {
+		m.addLog(fmt.Sprintf("%s: %s", msg.title, msg.text))
+		m.setToast(sSuccess.Render("✓ "+msg.text), 4*time.Second)
+	}
+	return m, nil
+}
+
+// ─────────────────────────────────────────────
+//  Command factories
+// ─────────────────────────────────────────────
+
+func (m tuiModel) cmdScanWithConfig(targets []string, cfg scanConfig, scanKind string) tea.Cmd {
+	return func() tea.Msg {
+		ports := cfg.Ports
+		if len(ports) == 0 {
+			ports = parsePorts(cfg.PortsString)
+		}
+		disc := cfg.Method
+		if disc == "masscan" && !scanner.ToolAvailable("masscan") {
+			disc = "direct"
+		}
+		if disc == "nmap" && !scanner.ToolAvailable("nmap") {
+			disc = "direct"
+		}
+		conc := cfg.Concurrency
+		if conc <= 0 {
+			conc = 500
+		}
+		timeout := time.Duration(6+conc/500) * time.Second
+		if timeout > 30*time.Second {
+			timeout = 30 * time.Second
+		}
+		opts := scanner.ProxyScanOptions{
+			Ports:       ports,
+			Discovery:   disc,
+			Concurrency: conc,
+			Timeout:     timeout,
+		}
+		var proxies []string
+		var err error
+		start := time.Now()
+		// The channel is already created on the model before this command runs
+		cbCh := m.scanMsgCh
+		// set log callback and proxy progress callback (forward all logs, non-blocking)
+		m.app.Scanner.SetLogCallback(func(msg string) {
+			select {
+			case cbCh <- logMsg{msg}:
+			default:
+			}
+		})
+		m.app.Scanner.SetProxyProgressCallback(func(processed, total, hits int, currentIP string, totalIPs int) {
+			// Map proxy progress into scanProgressMsg for the UI
+			msg := scanProgressMsg{current: processed, total: total, hits: hits, startTime: start, currentIP: currentIP, totalIPs: totalIPs}
+			select {
+			case cbCh <- msg:
+			default:
+			}
+		})
+		// ensure callbacks are cleared
+		defer func() {
+			m.app.Scanner.SetLogCallback(nil)
+			m.app.Scanner.SetProxyProgressCallback(nil)
+		}()
+		if scanKind == "socks5" {
+			proxies, err = m.app.Scanner.ScanSOCKS5Proxies(targets, opts)
+		} else {
+			proxies, err = m.app.Scanner.ScanHTTPProxies(targets, opts)
+		}
+		if err != nil && disc != "direct" {
+			if strings.Contains(strings.ToLower(err.Error()), "not found") {
+				opts.Discovery = "direct"
+				if scanKind == "socks5" {
+					proxies, err = m.app.Scanner.ScanSOCKS5Proxies(targets, opts)
+				} else {
+					proxies, err = m.app.Scanner.ScanHTTPProxies(targets, opts)
+				}
+			}
+		}
+		if err != nil {
+			return scanCompleteMsg{err: err}
+		}
+		for _, p := range proxies {
+			ep := parseProxyEndpointFromResult(p)
+			if ep == "" {
+				continue
+			}
+			m.app.Router.AddRouteToCache("scan", ep, 500.0, true)
+		}
+		return scanCompleteMsg{proxies: proxies}
+	}
+}
+
+func (m tuiModel) cmdPoolOperation(opType string, asnNetworks []string) tea.Cmd {
+	if opType == "scan_ips" {
+		cfg := m.scanConfig
+		scannerInst := m.app.Scanner
+		ch := m.scanMsgCh
+		if ch == nil {
+			ch = make(chan tea.Msg, 65536)
+		}
+		// save channel on model so Update can re-arm waiting for messages
+		m.scanMsgCh = ch
+		m.app.Scanner.SetTargetPorts(cfg.Ports)
+		return tea.Batch(
+			func() tea.Msg {
+				t0 := time.Now()
+				targets := asnNetworks
+				if len(targets) == 0 {
+					targets = cfg.Targets
+				}
+
+				ports := cfg.Ports
+				if len(ports) == 0 {
+					ports = []int{443, 2053, 2083, 2087, 2096, 8443}
+				}
+				endpointCount := len(targets) * len(ports)
+				conc := cfg.Concurrency
+				if conc <= 0 {
+					conc = 250
+				}
+				timeout := scanTimeoutBudget(endpointCount)
+				opts := scanner.IPScanOptions{
+					Ports:             ports,
+					Concurrency:       conc,
+					Timeout:           timeout,
+					ProbeDomainsHTTP:  []string{"instagram.com", "chatgpt.com", "web.telegram.org", "reddit.com", "claude.ai", "pages.dev", "workers.dev", "gemini.google.com", "notebooklm.google.com"},
+					ProbeDomainsHTTPS: []string{"instagram.com", "chatgpt.com", "web.telegram.org", "reddit.com", "claude.ai", "pages.dev", "workers.dev", "gemini.google.com", "notebooklm.google.com"},
+					EndpointCount:     endpointCount,
+				}
+
+				scannerInst.SetLogCallback(func(msg string) {
+					select {
+					case ch <- logMsg{text: msg}:
+					case <-time.After(50 * time.Millisecond):
+					}
+				})
+				defer scannerInst.SetLogCallback(nil)
+
+				start := time.Now()
+				lastSent := 0
+				lastAt := time.Time{}
+				progressCb := func(processed, totalProbes, accepted int, currentIP string, totalIPs int) {
+					if totalProbes <= 0 {
+						return
+					}
+					now := time.Now()
+					shouldSend := processed == totalProbes || processed-lastSent >= 25 || now.Sub(lastAt) >= 250*time.Millisecond
+					if !shouldSend {
+						return
+					}
+					msg := scanProgressMsg{current: processed, total: totalProbes, hits: accepted, startTime: start, currentIP: currentIP, totalIPs: totalIPs}
+					select {
+					case ch <- msg:
+					case <-time.After(50 * time.Millisecond):
+						// drop if unable to send within 50ms to avoid blocking scanner
+					}
+					lastSent = processed
+					lastAt = now
+				}
+
+				results, err := scannerInst.ScanIPsWithProgress(targets, opts, progressCb)
+				if err != nil {
+					close(ch)
+					return poolOperationCompleteMsg{operationType: opType, err: err, duration: time.Since(t0)}
+				}
+				if len(results) == 0 {
+					results = []string{"No responding IPs found"}
+				}
+				close(ch)
+				return poolOperationCompleteMsg{operationType: opType, results: results, duration: time.Since(t0)}
+			},
+			waitForScanMessage(ch),
+		)
+	}
+
+	return func() tea.Msg {
+		t0 := time.Now()
+		var results []string
+
+		switch opType {
+		case "scan_ips":
+			targets := asnNetworks
+			if len(targets) == 0 {
+				targets = m.scanConfig.Targets
+			}
+			ports := m.scanConfig.Ports
+			if len(ports) == 0 {
+				ports = []int{443, 2053, 2083, 2087, 2096, 8443}
+			}
+			m.app.Scanner.SetTargetPorts(ports)
+			conc := m.scanConfig.Concurrency
+			if conc <= 0 {
+				conc = 250
+			}
+			timeout := 6 * time.Second
+			if conc > 2000 {
+				timeout = 8 * time.Second
+			}
+			opts := scanner.IPScanOptions{
+				Ports:                     ports,
+				Concurrency:               conc,
+				Timeout:                   timeout,
+				ProbeDomainsHTTP:          []string{"instagram.com", "chatgpt.com", "web.telegram.org", "reddit.com", "claude.ai", "pages.dev", "workers.dev", "gemini.google.com", "notebooklm.google.com"},
+				ProbeDomainsHTTPS:         []string{"instagram.com", "chatgpt.com", "web.telegram.org", "reddit.com", "claude.ai", "pages.dev", "workers.dev", "gemini.google.com", "notebooklm.google.com"},
+				AdaptiveDomainConcurrency: m.scanConfig.AdaptiveDomainConcurrency,
+				Method:                    strings.ToLower(strings.TrimSpace(m.scanConfig.Method)),
+			}
+			var err error
+			results, err = m.app.Scanner.ScanIPsWithCIDR(targets, opts)
+			if err != nil {
+				return poolOperationCompleteMsg{operationType: opType, err: err, duration: time.Since(t0)}
+			}
+			if len(results) == 0 {
+				results = []string{"No responding IPs found"}
+			}
+
+		case "reload_pool":
+			routesFile := filepath.Join(m.app.DataDir, "white_routes.txt")
+			count, err := m.app.Router.LoadRoutes(routesFile)
+			if err != nil {
+				return poolOperationCompleteMsg{operationType: opType, err: err, duration: time.Since(t0)}
+			}
+			results = []string{fmt.Sprintf("Loaded %d routes", count)}
+
+		case "inspect_pool":
+			stats := m.app.Scanner.GetAllStats()
+			for _, net := range asnNetworks {
+				for ip := range stats {
+					if strings.Contains(ip, net) || net == "all" {
+						results = append(results, ip)
+					}
+				}
+			}
+			if len(results) == 0 {
+				results = []string{"No IPs found for selected ASNs"}
+			}
+		}
+
+		return poolOperationCompleteMsg{operationType: opType, results: results, duration: time.Since(t0)}
+	}
+}
+
+func waitForScanMessage(ch <-chan tea.Msg) tea.Cmd {
+	return func() tea.Msg {
+		if ch == nil {
+			return nil
+		}
+		msg, ok := <-ch
+		if !ok {
+			return nil
+		}
+		return msg
+	}
+}
+
+func (m tuiModel) cmdProxyScan(targets []string, cfg scanConfig, scanKind string) tea.Cmd {
+	scannerInst := m.app.Scanner
+	ch := m.scanMsgCh
+	if ch == nil {
+		ch = make(chan tea.Msg, 65536)
+	}
+	m.scanMsgCh = ch
+
+	return tea.Batch(
+		func() tea.Msg {
+			t0 := time.Now()
+
+			ports := cfg.Ports
+			if len(ports) == 0 {
+				ports = parsePorts(cfg.PortsString)
+			}
+			disc := cfg.Method
+			origMethod := disc
+
+			if disc == "masscan" && !scanner.ToolAvailable("masscan") {
+				disc = "direct"
+			}
+			if disc == "nmap" && !scanner.ToolAvailable("nmap") {
+				disc = "direct"
+			}
+
+			// Log fallback if it occurred
+			if origMethod != disc && origMethod != "direct" {
+				ch <- logMsg{fmt.Sprintf("[!] %s not available - using direct scanning as fallback", strings.ToUpper(origMethod))}
+			}
+			conc := cfg.Concurrency
+			if conc <= 0 {
+				conc = 500
+			}
+			timeout := time.Duration(6+conc/500) * time.Second
+			if timeout > 30*time.Second {
+				timeout = 30 * time.Second
+			}
+			opts := scanner.ProxyScanOptions{
+				Ports:       ports,
+				Discovery:   disc,
+				Concurrency: conc,
+				Timeout:     timeout,
+			}
+
+			// Forward logs to UI with short timeout to avoid blocking scanner
+			scannerInst.SetLogCallback(func(msg string) {
+				select {
+				case ch <- logMsg{text: msg}:
+				case <-time.After(50 * time.Millisecond):
+				}
+			})
+			defer scannerInst.SetLogCallback(nil)
+
+			start := time.Now()
+			lastSent := 0
+			lastAt := time.Time{}
+
+			// Set log callback (forward with timeout)
+			scannerInst.SetLogCallback(func(msg string) {
+				select {
+				case ch <- logMsg{msg}:
+				case <-time.After(50 * time.Millisecond):
+				}
+			})
+
+			// Set progress callback
+			progressCb := func(processed, total, hits int, currentIP string, totalIPs int) {
+				if total <= 0 {
+					return
+				}
+				now := time.Now()
+				shouldSend := processed == total || processed-lastSent >= 10 || now.Sub(lastAt) >= 500*time.Millisecond
+				if !shouldSend {
+					return
+				}
+				msg := scanProgressMsg{current: processed, total: total, hits: hits, startTime: start, currentIP: currentIP, totalIPs: totalIPs}
+				select {
+				case ch <- msg:
+				case <-time.After(50 * time.Millisecond):
+				}
+				lastSent = processed
+				lastAt = now
+			}
+			scannerInst.SetProxyProgressCallback(progressCb)
+
+			defer func() {
+				scannerInst.SetLogCallback(nil)
+				scannerInst.SetProxyProgressCallback(nil)
+				close(ch)
+			}()
+
+			var proxies []string
+			var err error
+			if scanKind == "socks5" {
+				proxies, err = scannerInst.ScanSOCKS5Proxies(targets, opts)
+			} else {
+				proxies, err = scannerInst.ScanHTTPProxies(targets, opts)
+			}
+
+			if err != nil {
+				return scanCompleteMsg{proxies: nil, err: err, duration: time.Since(t0)}
+			}
+			return scanCompleteMsg{proxies: proxies, err: nil, duration: time.Since(t0)}
+		},
+		waitForScanMessage(ch),
+	)
+}
+
+func (m tuiModel) cmdManagePool() tea.Cmd {
+	return func() tea.Msg {
+		stats := m.app.Scanner.GetAllStats()
+		return actionCompleteMsg{title: "Pool", text: fmt.Sprintf("Pool size: %d endpoints", len(stats))}
+	}
+}
+
+func (m tuiModel) cmdInstallMMDFCA() tea.Cmd {
+	return func() tea.Msg {
+		result, err := mmdf.InstallCA(m.app.DataDir)
+		if err != nil {
+			return actionCompleteMsg{title: "MMDF CA", err: err}
+		}
+		msg := "Install finished"
+		if v, ok := result["message"].(string); ok && v != "" {
+			msg = v
+		}
+		return actionCompleteMsg{title: "MMDF CA", text: msg}
+	}
+}
+
+func (m tuiModel) cmdInspectIP(ip string) tea.Cmd {
+	return func() tea.Msg {
+		info, err := m.app.ASNEngine.Lookup(ip)
+		if err != nil {
+			return actionCompleteMsg{title: "IP Lookup", err: err}
+		}
+		text := fmt.Sprintf("ASN:%s  Name:%s  Type:%s  CIDR:%s", info.ASN, info.Name, info.Type, info.CIDR)
+		return actionCompleteMsg{title: "IP Info", text: text}
+	}
+}
+
+func (m tuiModel) cmdStartProxy(mode string) tea.Cmd {
+	return func() tea.Msg {
+		m.app.startGoProxy(mode)
+		return actionCompleteMsg{title: "Proxy", text: "Proxy stopped"}
+	}
+}
+
+func (m tuiModel) cmdBridgeAction(action string) tea.Cmd {
+	return func() tea.Msg {
+		if m.app.PythonBridge == nil {
+			return actionCompleteMsg{title: "Bridge", err: fmt.Errorf("python bridge unavailable")}
+		}
+		if err := m.app.PythonBridge.RunAction(action); err != nil {
+			return actionCompleteMsg{title: "Bridge", err: err}
+		}
+		return actionCompleteMsg{title: "Bridge", text: action + " completed"}
+	}
+}
+
+// ─────────────────────────────────────────────
+//  Helpers
+// ─────────────────────────────────────────────
+
+func (m *tuiModel) pushScreen(next string) {
+	m.prevScreen = m.screen
+	m.screen = next
+	m.screenChanged = true
+	m.cursor = 0
+}
+
+func (m *tuiModel) goBack() {
+	if m.prevScreen != "" {
+		m.screen = m.prevScreen
+	} else {
+		m.screen = screenMenu
+	}
+	m.prevScreen = ""
+	m.screenChanged = true
+	m.cursor = 0
+}
+
+func (m *tuiModel) setupInput(placeholder string) {
+	m.ti.SetValue("")
+	m.ti.Placeholder = placeholder
+	// Allow multiline input for pasting multiple IPs
+	m.ti.CharLimit = 0 // unlimited for paste mode
+	// reset paste confirm state when entering input
+	m.pasteConfirm = false
+	m.lastEnterTime = time.Time{} // reset Enter time tracking
+	m.ti.Focus()
+}
+
+func (m *tuiModel) resetASNScreen(placeholder string) {
+	m.selectedItems = make(map[int]bool)
+	m.asnFiltered = m.asnList
+	m.cursor = 0
+	m.typingEnabled = true
+	m.ti.SetValue("")
+	m.ti.Placeholder = placeholder
+	m.ti.Focus()
+}
+
+func (m *tuiModel) startOperation() {
+	m.pushScreen(screenScanning)
+	m.scanStartTime = time.Now()
+	m.scanProgress = 0
+	m.scanHits = 0
+	m.scanResults = nil
+	m.scanErr = nil
+}
+
+func (m *tuiModel) gotoScanMode(opType, kind string) {
+	m.prevScreen = screenMenu
+	m.screen = screenScanMode
+	m.operationType = opType
+	m.scanKind = kind
+	m.scanConfig = scanConfig{}
+	m.cursor = 0
+	m.selectedItems = make(map[int]bool)
+}
+
+func (m *tuiModel) addLog(text string) {
+	entry := fmt.Sprintf("[%s] %s", time.Now().Format("15:04:05"), text)
+	m.logs = append(m.logs, entry)
+	m.writeScanLogLine(entry)
+}
+
+func (m *tuiModel) writeScanLogLine(line string) {
+	if m == nil || m.scanLogPath == "" {
+		return
+	}
+	m.scanLogMu.Lock()
+	defer m.scanLogMu.Unlock()
+	if err := os.MkdirAll(filepath.Dir(m.scanLogPath), 0o755); err != nil {
+		return
+	}
+	f, err := os.OpenFile(m.scanLogPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	_, _ = f.WriteString(line + "\n")
+}
+
+func (m *tuiModel) startScanLogFile(scanKind string, targets []string, ports []int, concurrency int, timeout time.Duration) string {
+	dataDir := "."
+	if m != nil && m.app != nil && m.app.DataDir != "" {
+		dataDir = m.app.DataDir
+	}
+	stamp := time.Now().Format("20060102-150405")
+	logDir := filepath.Join(dataDir, "scan_logs")
+	path := filepath.Join(logDir, fmt.Sprintf("scan-%s-%s.txt", scanKind, stamp))
+	if absPath, err := filepath.Abs(path); err == nil {
+		path = absPath
+	}
+	m.scanLogPath = path
+	m.writeScanLogLine(fmt.Sprintf("[START] kind=%s targets=%d ports=%d concurrency=%d timeout=%s", scanKind, len(targets), len(ports), concurrency, timeout))
+
+		transferPath := filepath.Join(logDir, fmt.Sprintf("transfer-%s-%s.txt", scanKind, stamp))
+		if absTransfer, err := filepath.Abs(transferPath); err == nil {
+			transferPath = absTransfer
+		}
+		m.transferLogPath = transferPath
+		_ = storage.AtomicWriteText(transferPath, fmt.Sprintf("# Transfer benchmark log\n# kind: %s\n# section: throughput latency tags\n\n", scanKind))
+		m.writeScanLogLine(fmt.Sprintf("[TRANSFER] log file: %s", transferPath))
+
+	// Log targets with proper spacing - one per line for readability
+	m.writeScanLogLine(fmt.Sprintf("[TARGETS] %d total:", len(targets)))
+	for i, target := range targets {
+		m.writeScanLogLine(fmt.Sprintf("  [%d] %s", i+1, target))
+	}
+
+	m.writeScanLogLine(fmt.Sprintf("[PORTS] %v", ports))
+
+	// create incremental scan output file so partial results are saved in real-time
+	outDir := filepath.Join(dataDir, "scan_outputs")
+	if err := os.MkdirAll(outDir, 0o755); err == nil {
+		stamp := time.Now().Format("20060102-150405")
+		outPath := filepath.Join(outDir, fmt.Sprintf("passed-%s-%s.txt", scanKind, stamp))
+		if absOut, err := filepath.Abs(outPath); err == nil {
+			outPath = absOut
+		}
+		header := fmt.Sprintf("# Passed endpoints\n# kind: %s\n# partial: true\n\n", scanKind)
+		// create initial file (overwrite if somehow exists)
+		_ = storage.AtomicWriteText(outPath, header)
+		m.scanOutputPath = outPath
+		// reset tracking
+		m.scanOutputMu.Lock()
+		m.scanOutputWritten = make(map[string]bool)
+		m.scanOutputMu.Unlock()
+		m.writeScanLogLine(fmt.Sprintf("[OUTPUT] incremental output: %s", outPath))
+	}
+	return path
+}
+
+// appendNewScanResultsToFile appends any newly discovered scan results
+// into the incremental output file (created at scan start). Duplicates
+// are tracked in memory to avoid repeated writes.
+func (m *tuiModel) appendNewScanResultsToFile() {
+	if m.scanOutputPath == "" {
+		return
+	}
+	m.scanOutputMu.Lock()
+	defer m.scanOutputMu.Unlock()
+	if len(m.scanResults) == 0 {
+		return
+	}
+	for _, ep := range m.scanResults {
+		if ep == "" {
+			continue
+		}
+		if m.scanOutputWritten[ep] {
+			continue
+		}
+		if err := storage.AppendLine(m.scanOutputPath, ep); err != nil {
+			m.writeScanLogLine(fmt.Sprintf("[OUTPUT] append failed: %v", err))
+			// don't mark as written on error
+			continue
+		}
+		m.scanOutputWritten[ep] = true
+	}
+}
+
+func (m *tuiModel) appendTransferLogLineFromScanLog(line string) {
+	if m == nil || m.transferLogPath == "" {
+		return
+	}
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return
+	}
+	if !strings.Contains(line, "↓") && !strings.Contains(line, "↑") && !strings.Contains(line, "[telegram]") && !strings.Contains(line, "[chatgpt]") && !strings.Contains(line, "[instagram]") && !strings.Contains(line, "[workers]") && !strings.Contains(line, "[pages]") && !strings.Contains(line, "[psiphon]") {
+		return
+	}
+	m.transferLogMu.Lock()
+	defer m.transferLogMu.Unlock()
+	if err := os.MkdirAll(filepath.Dir(m.transferLogPath), 0o755); err != nil {
+		return
+	}
+	if err := storage.AppendLine(m.transferLogPath, line); err != nil {
+		m.writeScanLogLine(fmt.Sprintf("[TRANSFER] append failed: %v", err))
+	}
+}
+
+func parseProxyEndpointFromResult(line string) string {
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return ""
+	}
+	parts := strings.Fields(line)
+	if len(parts) == 0 {
+		return ""
+	}
+	// New proxy format: "http 1.2.3.4:8080 lat=... [tag]"
+	if len(parts) >= 2 && strings.Contains(parts[1], ":") {
+		return parts[1]
+	}
+	// Backward-compatible legacy endpoint-only format.
+	if strings.Contains(parts[0], ":") {
+		return parts[0]
+	}
+	return ""
+}
+
+func scanTimeoutBudget(endpointCount int) time.Duration {
+	switch {
+	case endpointCount >= 1000000:
+		return 1500 * time.Millisecond
+	case endpointCount >= 100000:
+		return 2 * time.Second
+	case endpointCount >= 10000:
+		return 2500 * time.Millisecond
+	case endpointCount >= 1000:
+		return 3 * time.Second
+	default:
+		return 4 * time.Second
+	}
+}
+
+func (m *tuiModel) setToast(text string, dur time.Duration) {
+	m.toast = text
+	m.toastExpiry = time.Now().Add(dur)
+}
+
+func (m tuiModel) toastActive() bool {
+	return time.Now().Before(m.toastExpiry)
+}
+
+// recentLogs returns the last n log lines, each clamped to maxW chars.
+func (m tuiModel) recentLogs(n, maxW int) []string {
+	start := len(m.logs) - n
+	if start < 0 {
+		start = 0
+	}
+	lines := make([]string, 0, n)
+	for i := start; i < len(m.logs); i++ {
+		l := m.logs[i]
+		if len(l) > maxW {
+			l = l[:maxW-1] + "…"
+		}
+		lines = append(lines, sDim.Render("  ▪ "+l))
+	}
+	return lines
+}
+
+// ─────────────────────────────────────────────
+//  Port parser
+// ─────────────────────────────────────────────
+
+func parsePorts(portStr string) []int {
+	if portStr == "" {
+		return []int{443, 2053, 2083, 2087, 2096, 8443}
+	}
+	seen := make(map[int]bool)
+	var ports []int
+	for _, part := range strings.Split(portStr, ",") {
+		part = strings.TrimSpace(part)
+		if strings.Contains(part, "-") {
+			rng := strings.SplitN(part, "-", 2)
+			s, _ := strconv.Atoi(strings.TrimSpace(rng[0]))
+			e, _ := strconv.Atoi(strings.TrimSpace(rng[1]))
+			for p := s; p <= e; p++ {
+				if !seen[p] {
+					ports = append(ports, p)
+					seen[p] = true
+				}
+			}
+		} else {
+			p, err := strconv.Atoi(part)
+			if err == nil && !seen[p] {
+				ports = append(ports, p)
+				seen[p] = true
+			}
+		}
+	}
+	if len(ports) == 0 {
+		return []int{80, 443, 8080}
+	}
+	sort.Ints(ports)
+	return ports
+}
+
+// compressPorts converts a list of ports into a compact range string,
+// e.g. [80,81,82,443,8000,8001] -> "80-82,443,8000-8001"
+func compressPorts(ports []int) string {
+	if len(ports) == 0 {
+		return ""
+	}
+	uniq := make(map[int]bool)
+	for _, p := range ports {
+		uniq[p] = true
+	}
+	var ps []int
+	for p := range uniq {
+		ps = append(ps, p)
+	}
+	sort.Ints(ps)
+	var parts []string
+	start := ps[0]
+	prev := ps[0]
+	for i := 1; i < len(ps); i++ {
+		cur := ps[i]
+		if cur == prev+1 {
+			prev = cur
+			continue
+		}
+		if start == prev {
+			parts = append(parts, fmt.Sprintf("%d", start))
+		} else {
+			parts = append(parts, fmt.Sprintf("%d-%d", start, prev))
+		}
+		start = cur
+		prev = cur
+	}
+	// finish last
+	if start == prev {
+		parts = append(parts, fmt.Sprintf("%d", start))
+	} else {
+		parts = append(parts, fmt.Sprintf("%d-%d", start, prev))
+	}
+	return strings.Join(parts, ",")
+}

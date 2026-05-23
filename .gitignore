@@ -1,0 +1,43 @@
+.venv/
+.whiteproxy/
+builds/
+__pycache__/
+*.pyc
+
+# Generated binaries
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Archives and packaged builds
+*.zip
+*.rar
+*.7z
+*.tar
+*.gz
+
+# Logs and runtime output
+*.log
+*.tmp
+*.pid
+*.seed
+scan_logs/
+scan_outputs/
+
+# Generated test artifacts
+test/*.exe
+test/*_output.txt
+
+# Local scratch files
+New Text Document.txt
+*.bak
+*.swp
+*.swo
+
+# Sensitive local config/state
+.env
+.env.*
+*.local
+*.secret
+*.secrets
