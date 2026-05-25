@@ -165,6 +165,15 @@ def replace_endpoint(config_text: str, target: str) -> str:
     return urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
 
 
+def rewrite_config_name(config_text: str, target: str) -> str:
+    config_text = config_text.strip()
+    if not config_text:
+        return config_text
+    if "#" in config_text:
+        return re.sub(r"#.*$", f"#{target}", config_text)
+    return f"{config_text}#{target}"
+
+
 def extract_configs(raw: str) -> list[str]:
     raw = raw.strip()
     if not raw:
@@ -259,11 +268,7 @@ def rewrite_configs(configs: list[str], targets: list[str], append_tag: bool) ->
     rewritten_blocks: list[str] = []
     for source, target in assign_samples_to_targets(configs, targets):
         rewritten = replace_endpoint(source, target)
-        if append_tag:
-            if "#" in rewritten:
-                rewritten = re.sub(r"#.*$", f"#{target}", rewritten)
-            else:
-                rewritten = f"{rewritten}#{target}"
+        rewritten = rewrite_config_name(rewritten, target)
         rewritten_blocks.append(rewritten)
     return rewritten_blocks
 
@@ -285,8 +290,6 @@ def interactive_run() -> int:
 
     output_default = SCRIPT_DIR / "rewritten_configs.txt"
     output_file = input(f"\nOutput TXT file [{output_default}]: ").strip() or str(output_default)
-    append_tag = input("Append target tag to #fragment? (y/N): ").strip().lower() == "y"
-
     output_path = Path(output_file)
     if not output_path.is_absolute():
         output_path = SCRIPT_DIR / output_path
@@ -294,7 +297,7 @@ def interactive_run() -> int:
         output_path = output_path.with_suffix(".txt")
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    rewritten_blocks = rewrite_configs(configs, targets, append_tag)
+    rewritten_blocks = rewrite_configs(configs, targets, True)
 
     output_path.write_text("\n".join(rewritten_blocks) + "\n", encoding="utf-8")
 
@@ -320,7 +323,7 @@ def main() -> int:
     parser.add_argument("--targets", help="Targets as comma/space/newline separated ip:port values, or a TXT file path.")
     parser.add_argument("--targets-file", help="Path to a TXT file containing target ip:port values.")
     parser.add_argument("--output", help="Output file path. Defaults to rewritten_configs.txt in the current folder.")
-    parser.add_argument("--append-target-tag", action="store_true", help="Append the target ip:port to the fragment tag.")
+    parser.add_argument("--append-target-tag", action="store_true", help="Kept for compatibility; the config name is always rewritten to the target ip:port.")
     args = parser.parse_args()
 
     if len(sys.argv) == 1:
@@ -346,7 +349,7 @@ def main() -> int:
         output_path = output_path.with_suffix(".txt")
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    rewritten_blocks = rewrite_configs(configs, targets, args.append_target_tag)
+    rewritten_blocks = rewrite_configs(configs, targets, True)
 
     output_path.write_text("\n".join(rewritten_blocks) + "\n", encoding="utf-8")
 
