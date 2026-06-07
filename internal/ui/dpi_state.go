@@ -21,6 +21,21 @@ type dpiState struct {
 	AlwaysShowDpiLogs bool     `json:"always_show_dpi_logs"`
 }
 
+type dpiStrategyOption struct {
+	ID          string
+	Description string
+}
+
+var dpiStrategyCatalog = []dpiStrategyOption{
+	{ID: "oob", Description: "Out-of-Bounds Sequence (Healthy Checksum) [Default]"},
+	{ID: "bad_csum", Description: "Invalid TCP Checksum (In-Bounds Sequence)"},
+	{ID: "ttl", Description: "TTL Expiration (Expires before reaching CDN)"},
+	{ID: "syn", Description: "TCP SYN Insertion (Fake SYN payload)"},
+	{ID: "rst", Description: "TCP RST Insertion (Fake RST payload)"},
+	{ID: "fin", Description: "TCP FIN Insertion (Fake FIN payload)"},
+	{ID: "classic", Description: "Segment Only (No Fake Packet, Relies on TCP Chunking)"},
+}
+
 func defaultDPIState() dpiState {
 	return dpiState{
 		ConnectionMode:    "white_ip",
@@ -96,6 +111,31 @@ func (s *dpiState) normalize() {
 	}
 }
 
+func (s dpiState) strategyEnabled(id string) bool {
+	return containsString(s.DpiStrategies, id)
+}
+
+func (s *dpiState) toggleStrategy(id string) {
+	id = strings.TrimSpace(strings.ToLower(id))
+	if id == "" {
+		return
+	}
+	updated := make([]string, 0, len(s.DpiStrategies)+1)
+	found := false
+	for _, existing := range s.DpiStrategies {
+		if existing == id {
+			found = true
+			continue
+		}
+		updated = append(updated, existing)
+	}
+	if !found {
+		updated = append(updated, id)
+	}
+	s.DpiStrategies = updated
+	s.normalize()
+}
+
 func containsString(items []string, needle string) bool {
 	for _, item := range items {
 		if item == needle {
@@ -124,4 +164,11 @@ func joinLines(values []string) string {
 func formatDPIStateSummary(state dpiState) string {
 	return fmt.Sprintf("mode=%s sni=%s ip=%s strategies=%v frag=%v logs=%v",
 		state.ConnectionMode, state.DpiSNI, state.DpiIP, state.DpiStrategies, state.DpiFragmentation, state.AlwaysShowDpiLogs)
+}
+
+func boolLabel(cond bool, onText, offText string) string {
+	if cond {
+		return onText
+	}
+	return offText
 }

@@ -35,6 +35,10 @@ var probePayloadCache = sync.Map{}
 // Calculated as: max(per-domain timeout) + buffer, matching Python's approach
 var globalHTTPClientTimeout = 15 * time.Second
 
+// Package-level feature flags driven by ScannerConfig (set on NewScanner)
+var probeRequireHTMLForDomainTokens = true
+var probeAcceptOnCertMatch = true
+
 // createHTTPClient builds a reusable HTTP client with configurable timeout
 func createHTTPClient(timeout time.Duration) *http.Client {
 	if timeout <= 0 {
@@ -336,6 +340,21 @@ func NewScanner(cfg *ScannerConfig) *Scanner {
 	}
 	s.httpClient = &http.Client{Transport: transport, Timeout: globalHTTPClientTimeout}
 
+	// Apply conservative feature flags from config (defaults true for robustness)
+	probeRequireHTMLForDomainTokens = true
+	probeAcceptOnCertMatch = true
+	if cfg != nil {
+		// Default to true for conservative robustness unless explicitly disabled.
+		if !cfg.ProbeRequireHTMLForDomainTokens {
+			cfg.ProbeRequireHTMLForDomainTokens = true
+		}
+		if !cfg.ProbeAcceptOnCertMatch {
+			cfg.ProbeAcceptOnCertMatch = true
+		}
+		probeRequireHTMLForDomainTokens = cfg.ProbeRequireHTMLForDomainTokens
+		probeAcceptOnCertMatch = cfg.ProbeAcceptOnCertMatch
+	}
+
 	return s
 }
 
@@ -352,6 +371,30 @@ func (s *Scanner) Resume() {
 // IsPaused returns true when scanner is paused.
 func (s *Scanner) IsPaused() bool {
 	return atomic.LoadInt32(&s.paused) == 1
+}
+
+// Runtime toggles for the conservative heuristics. These update package
+// feature flags and mirror the config on the scanner instance.
+func (s *Scanner) SetProbeRequireHTMLForDomainTokens(v bool) {
+	probeRequireHTMLForDomainTokens = v
+	if s != nil && s.config != nil {
+		s.config.ProbeRequireHTMLForDomainTokens = v
+	}
+}
+
+func (s *Scanner) SetProbeAcceptOnCertMatch(v bool) {
+	probeAcceptOnCertMatch = v
+	if s != nil && s.config != nil {
+		s.config.ProbeAcceptOnCertMatch = v
+	}
+}
+
+func (s *Scanner) GetProbeRequireHTMLForDomainTokens() bool {
+	return probeRequireHTMLForDomainTokens
+}
+
+func (s *Scanner) GetProbeAcceptOnCertMatch() bool {
+	return probeAcceptOnCertMatch
 }
 
 // ScanIPsWithCIDR scans IPs from CIDR blocks for connectivity
@@ -968,6 +1011,32 @@ func minimumDomainAcceptScore(domainCount int) int {
 	return 2
 }
 
+// looksLikeHTMLResponse performs a lightweight check for HTML-like bodies.
+// This avoids accepting non-HTML structured payloads (JSON, plaintext) that
+// merely contain the domain string.
+func looksLikeHTMLResponse(body []byte) bool {
+	if len(body) == 0 {
+		return false
+	}
+	b := strings.ToLower(string(body))
+	return strings.Contains(b, "<html") || strings.Contains(b, "<body") || strings.Contains(b, "<!doctype") || strings.Contains(b, "text/html")
+}
+
+// certMatchesDomain checks whether the peer certificate presented during the
+// TLS handshake is valid for the given domain. This is a strong signal that
+// the endpoint legitimately serves the requested SNI name.
+func certMatchesDomain(state tls.ConnectionState, domain string) bool {
+	if len(state.PeerCertificates) == 0 {
+		return false
+	}
+	// Use the standard VerifyHostname helper on the leaf cert.
+	leaf := state.PeerCertificates[0]
+	if err := leaf.VerifyHostname(domain); err == nil {
+		return true
+	}
+	return false
+}
+
 // buildProbePayload constructs and caches HTTP probe payloads
 func buildProbePayload(domain, path string) string {
 	cacheKey := domain + ":" + path
@@ -1080,6 +1149,19 @@ func (s *Scanner) probeHTTPS(ctx context.Context, ip string, port int, opts IPSc
 			statusCode, headers, body := parseRawHTTPResponse(resp)
 			result.StatusCode = statusCode
 			result.Status = classifyResponse(statusCode, body, headers, domain)
+			// If the TLS certificate presented matches the probe domain, accept as
+			// strong evidence even if the HTTP body lacked explicit HTML domain
+			// tokens. This reduces false positives for SNI-backed hosts while being
+			// conservative: a valid cert is a high-confidence indicator.
+			state := tlsConn.ConnectionState()
+			if probeAcceptOnCertMatch {
+				if !strings.HasPrefix(result.Status, "accept") && certMatchesDomain(state, domain) {
+					if statusCode >= 200 && statusCode < 400 {
+						result.Status = "accept"
+						s.logf("[SNI] %s:%d domain=%s cert matches SAN; upgrading to accept\n", ip, port, domain)
+					}
+				}
+			}
 			result.Domain = domain
 			// Apply Python-like TLS->HTTP fallback: if classification was a hard reject
 			// but the status code is in tlsHTTPFallbackAcceptStatus and the response
@@ -1215,6 +1297,11 @@ func classifyResponse(statusCode int, body []byte, headers http.Header, domain s
 	}
 
 	hasCDNSig := hasCDNHeaderSignature(headersLower)
+	// Extra heuristic: prefer real HTML evidence for domain matches to avoid
+	// accidental JSON/noise hits containing the domain string. This is a
+	// conservative increase in evidence required for an "accept" decision
+	// while preserving CDN and redirect-based fallbacks.
+	hasHTMLBody := looksLikeHTMLResponse(body)
 	// Python looks for CRLF+location header; mirror that exact check.
 	hasLocationMatch := strings.Contains(headersLower, "\r\nlocation:") && domainFound
 
@@ -1222,17 +1309,26 @@ func classifyResponse(statusCode int, body []byte, headers http.Header, domain s
 	case statusCode >= 500:
 		return "reject"
 	case statusCode == 400, statusCode == 403, statusCode == 409, statusCode == 421, statusCode == 451:
-		if domainFound && !hasCDNSig {
+		// For error-style status codes, prefer CDN evidence or an actual HTML
+		// body containing domain tokens rather than raw token matches in JSON
+		// or error pages.
+		if hasCDNSig {
+			return "accept"
+		}
+		if domainFound && (!probeRequireHTMLForDomainTokens || hasHTMLBody) {
 			return "accept"
 		}
 		return "reject"
 	case statusCode >= 200 && statusCode < 400:
-		if domainFound || hasLocationMatch || hasCDNSig {
+		// Require stronger evidence when relying on domain token matches to
+		// avoid accepting responses that merely echo the domain in structured
+		// payloads. CDN signatures or location redirects remain valid paths.
+		if hasCDNSig || hasLocationMatch || (domainFound && (!probeRequireHTMLForDomainTokens || hasHTMLBody)) {
 			return "accept"
 		}
 		return "reject"
 	case statusCode > 400 && statusCode < 500:
-		if domainFound || hasCDNSig {
+		if hasCDNSig || (domainFound && (!probeRequireHTMLForDomainTokens || hasHTMLBody)) {
 			return "accept"
 		}
 		return "reject"

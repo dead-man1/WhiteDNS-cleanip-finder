@@ -83,6 +83,52 @@ def prompt_dpi_target_from_pairs(pairs):
     time.sleep(1)
 
 
+def menu_manage_tls_probe_domains():
+    current = data_store.read_lines("tls_probe_domains.txt", encoding="utf-8") or []
+    current = [line.strip() for line in current if line.strip() and not line.strip().startswith("#")]
+
+    ui_layout.print_section("TLS PROBE DOMAINS", tone="mode_desync")
+    print("Current custom domains:")
+    if current:
+        for idx, domain in enumerate(current, start=1):
+            print(f"  [{idx}] {domain}")
+    else:
+        print("  (none)")
+
+    print("\nEnter domains to add, one per line. Press Enter on an empty line to finish.")
+    print("Use Ctrl+C to cancel without saving.")
+
+    new_domains = []
+    try:
+        while True:
+            domain = input("Domain: ").strip()
+            if not domain:
+                break
+            new_domains.append(domain)
+    except KeyboardInterrupt:
+        ui_layout.print_err("Cancelled.")
+        time.sleep(1)
+        return
+
+    if not new_domains:
+        ui_layout.print_ok("No changes made.")
+        time.sleep(1)
+        return
+
+    merged = []
+    seen = set()
+    for domain in current + new_domains:
+        normalized = domain.strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        merged.append(normalized)
+
+    data_store.write_text("tls_probe_domains.txt", "\n".join(merged) + "\n", encoding="utf-8")
+    ui_layout.print_ok(f"Saved {len(merged)} TLS probe domains")
+    time.sleep(1)
+
+
 def menu_manage_dpi_strategies():
     all_strats = [
         {"id": "oob", "desc": "Out-of-Bounds Sequence (Healthy Checksum) [Default]"},

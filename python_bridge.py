@@ -73,6 +73,9 @@ def _run_action(action):
     elif action == "desync_strategies":
         import cores.ui_dpi as ui_dpi
         ui_dpi.menu_manage_dpi_strategies()
+    elif action == "manage_tls_probe":
+        import cores.ui_dpi as ui_dpi
+        ui_dpi.menu_manage_tls_probe_domains()
     elif action == "select_dpi_target":
         import cores.ui_dpi as ui_dpi
         pairs = ui_dpi.load_desync_pairs()
@@ -90,12 +93,17 @@ def _run_action(action):
         # Execute the standalone config maker script (resides in 'config maker' folder)
         import runpy
         here = os.path.abspath(os.path.dirname(__file__))
-        script_path = os.path.join(here, "..", "config maker", "config_maker.py")
+        script_path = os.path.join(here, "config maker", "config_maker.py")
         script_path = os.path.abspath(script_path)
         if not os.path.exists(script_path):
             print(f"Config maker script not found: {script_path}")
             return
-        runpy.run_path(script_path, run_name="__main__")
+        old_argv = sys.argv[:]
+        try:
+            sys.argv = [script_path]
+            runpy.run_path(script_path, run_name="__main__")
+        finally:
+            sys.argv = old_argv
     elif action == "start_white_proxy":
         APP_SERVICE.set_connection_mode("white_ip", persist=True)
         import cores.white_core as proxy_core
@@ -124,12 +132,17 @@ def _run_action(action):
 
 def main():
     parser = argparse.ArgumentParser(description="Go<->Python compatibility bridge")
-    parser.add_argument("--action", required=True)
+    parser.add_argument("--action", dest="action_flag")
+    parser.add_argument("action_pos", nargs="?")
     args = parser.parse_args()
+
+    action = args.action_flag or args.action_pos
+    if not action:
+        parser.error("the following arguments are required: --action")
 
     _bootstrap_parent_path()
     _init_base()
-    _run_action(args.action)
+    _run_action(action)
 
 
 if __name__ == "__main__":

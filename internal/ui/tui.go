@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"net"
 	"os"
 	"path/filepath"
 	"sort"
@@ -14,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"whitedns-go/internal/config"
 	"whitedns-go/internal/mmdf"
 	"whitedns-go/internal/scanner"
 	"whitedns-go/internal/storage"
@@ -143,7 +145,10 @@ const (
 	screenScanning          = "scanning"
 	screenInstantConnect    = "instant_connect"
 	screenManageRules       = "manage_rules"
+	screenEditDPITarget     = "edit_dpi_target"
+	screenManageDPISettings = "manage_dpi_settings"
 	screenManageTLSProbe    = "manage_tls_probe"
+	screenToggleProbeFlags  = "toggle_probe_flags"
 	screenInspectIP         = "inspect_ip"
 	screenReloadPool        = "reload_pool"
 	screenForceReroute      = "force_reroute"
@@ -270,13 +275,25 @@ type tuiModel struct {
 	spinner spinner.Model
 	vp      viewport.Model // for scrollable result lists
 
-	tiStep        int
-	logs          []string
-	operationType string
-	toast         string
-	toastExpiry   time.Time
-	stepData      map[string]string
-	scanConfig    scanConfig
+	tiStep                int
+	logs                  []string
+	operationType         string
+	toast                 string
+	toastExpiry           time.Time
+	stepData              map[string]string
+	configMakerStage      string
+	configMakerFlow       string
+	configMakerSourceMode string
+	configMakerTargetMode string
+	configMakerConfigText string
+	configMakerTargetText string
+	configMakerOutputPath string
+	configMakerMessage    string
+	configMakerPreview    []string
+	scanConfig            scanConfig
+	menuCol               int
+	menuRow               int
+	dpiState              dpiState
 
 	asnList     []asnEntry
 	asnFiltered []asnEntry
@@ -350,6 +367,7 @@ func NewTUI(a *App) *tuiModel {
 		{key: "f", label: "Install MMDF CA", action: "install_mmdf_ca"},
 		{key: "g", label: "Desync Scanner", action: "desync_scanner"},
 		{key: "M", label: "Manage SNI Probe Domains", action: "manage_tls_probe"},
+		{key: "T", label: "Settings: Probe Heuristics", action: "toggle_probe_flags"},
 		{key: "C", label: "Config Maker", action: "config_maker"},
 		{key: "n", label: "Configure Desync", action: "configure_desync"},
 		{key: "x", label: "Clear Cache", action: "clear_cache"},
@@ -358,17 +376,18 @@ func NewTUI(a *App) *tuiModel {
 	}
 
 	m := &tuiModel{
-		app:           a,
-		width:         80,
-		height:        24,
-		screen:        screenMenu,
-		menu:          menu,
-		ti:            ti,
-		spinner:       sp,
-		logs:          []string{},
-		operationType: "scan",
-		stepData:      make(map[string]string),
-		scanConfig:    scanConfig{Concurrency: 250, TransferModel: "old"},
+		app:                   a,
+		width:                 80,
+		height:                24,
+		screen:                screenMenu,
+		menu:                  menu,
+		ti:                    ti,
+		spinner:               sp,
+		logs:                  []string{},
+		operationType:         "scan",
+		stepData:              make(map[string]string),
+		configMakerOutputPath: "",
+		scanConfig:            scanConfig{Concurrency: 250, TransferModel: "old"},
 		portPresets: []portPreset{
 			{label: "80 - HTTP only", ports: "80"},
 			{label: "443 - HTTPS only", ports: "443"},
@@ -396,6 +415,9 @@ func NewTUI(a *App) *tuiModel {
 		selectedItems:      make(map[int]bool),
 		scanKind:           "http",
 		typingEnabled:      true,
+		menuCol:            0,
+		menuRow:            0,
+		dpiState:           loadDPIState(a.DataDir),
 	}
 
 	// prepare incremental output tracking
@@ -673,8 +695,16 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m, screenCmd = m.handleInstantConnectScreen(msg)
 	case screenManageRules:
 		m, screenCmd = m.handleManageRulesScreen(msg)
+	case screenConfigMaker:
+		m, screenCmd = m.handleConfigMakerScreen(msg)
+	case screenEditDPITarget:
+		m, screenCmd = m.handleEditDPITargetScreen(msg)
+	case screenManageDPISettings:
+		m, screenCmd = m.handleManageDPISettingsScreen(msg)
 	case screenManageTLSProbe:
 		m, screenCmd = m.handleManageTLSProbeScreen(msg)
+	case screenToggleProbeFlags:
+		m, screenCmd = m.handleToggleProbeFlagsScreen(msg)
 	case screenInspectIP:
 		m, screenCmd = m.handleInspectIPScreen(msg)
 	case screenForceReroute:
@@ -730,8 +760,18 @@ func (m tuiModel) View() string {
 		body = m.viewScanResults(w, h)
 	case screenManageRules:
 		body = m.viewManageRules(w, h)
+	case screenConfigMaker:
+		body = m.viewConfigMaker(w, h)
+	case screenManageDPISettings:
+		body = m.viewManageDPISettings(w, h)
+	case screenToggleProbeFlags:
+		body = m.viewToggleProbeFlags(w, h)
 	case screenInstantConnect:
 		body = m.viewSimpleInput(w, h, "Instant Connect", "IP:port endpoints (space separated)")
+	case screenEditDPITarget:
+		body = m.viewEditDPITarget(w, h)
+	case screenManageTLSProbe:
+		body = m.viewManageTLSProbe(w, h)
 	case screenInspectIP:
 		body = m.viewSimpleInput(w, h, "Inspect IP", "Enter IP address")
 	case screenForceReroute:
@@ -775,6 +815,7 @@ func (m tuiModel) View() string {
 
 func (m tuiModel) viewMenu(w, h int) string {
 	inner := w - 6 // account for panel border+padding
+	half := (len(m.menu) + 1) / 2
 
 	// Title bar
 	titleBar := renderGradientText("WHITEDNS v1", []string{"#ff0000", "#ff0000"}, true) + "  " +
@@ -782,8 +823,7 @@ func (m tuiModel) viewMenu(w, h int) string {
 		sDim.Render(fmt.Sprintf("port:%d  logs:%d  %s", m.app.Cfg.ProxyPort, len(m.logs), time.Now().Format("15:04:05")))
 	accentBar := lipgloss.NewStyle().Foreground(cAccent).Render(strings.Repeat("-", inner-1))
 
-	// Two-column menu-
-	half := (len(m.menu) + 1) / 2
+	// Two-column menu
 	colW := (inner - 4) / 2
 
 	var col1, col2 []string
@@ -792,14 +832,17 @@ func (m tuiModel) viewMenu(w, h int) string {
 		if len(label) > colW-2 {
 			label = label[:colW-3] + "..."
 		}
-		// Pad to column width BEFORE applying styles
-		paddedLabel := label + strings.Repeat(" ", colW-len([]rune(label)))
-
-		var rendered string
-		if i == m.cursor {
-			rendered = sSelected.Render(paddedLabel)
+		row := i
+		col := 0
+		if i >= half {
+			col = 1
+			row = i - half
+		}
+		rendered := lipgloss.NewStyle().Width(colW).Render(label)
+		if col == m.menuCol && row == m.menuRow {
+			rendered = sSelected.Width(colW).Render(label)
 		} else {
-			rendered = sNormal.Render(paddedLabel)
+			rendered = sNormal.Width(colW).Render(label)
 		}
 		if i < half {
 			col1 = append(col1, rendered)
@@ -809,10 +852,10 @@ func (m tuiModel) viewMenu(w, h int) string {
 	}
 	// Equalize column lengths
 	for len(col1) < len(col2) {
-		col1 = append(col1, strings.Repeat(" ", colW+4)) // Account for style padding
+		col1 = append(col1, strings.Repeat(" ", colW))
 	}
 	for len(col2) < len(col1) {
-		col2 = append(col2, strings.Repeat(" ", colW+4))
+		col2 = append(col2, strings.Repeat(" ", colW))
 	}
 
 	var menuRows strings.Builder
@@ -835,7 +878,7 @@ func (m tuiModel) viewMenu(w, h int) string {
 	logPanel := panelStyle(cBorderAlt).Width(inner).Render(logContent)
 
 	// Help bar (restore arrows/emojis)
-	help := sDim.Render("↑↓ / jk navigate  ·  Enter select  ·  q quit")
+	help := sDim.Render("↑↓ move column  ·  ←→ switch columns  ·  Enter select  ·  q quit")
 
 	var out strings.Builder
 	out.WriteString(titleBar + "\n")
@@ -1113,6 +1156,42 @@ func (m tuiModel) viewSelectMethod(w, h int) string {
 	return m.viewList(w, h, "SCAN METHOD", labels, help)
 }
 
+func (m tuiModel) viewToggleProbeFlags(w, h int) string {
+	inner := w - 6
+	title := sHeader.Render(" SETTINGS - PROBE HEURISTICS ")
+	requireHTML := "OFF"
+	acceptCert := "OFF"
+	if m.app != nil && m.app.Scanner != nil {
+		if m.app.Scanner.GetProbeRequireHTMLForDomainTokens() {
+			requireHTML = "ON"
+		}
+		if m.app.Scanner.GetProbeAcceptOnCertMatch() {
+			acceptCert = "ON"
+		}
+	}
+	items := []string{
+		fmt.Sprintf("Require HTML for domain tokens  [%s]", requireHTML),
+		fmt.Sprintf("Accept on TLS cert match       [%s]", acceptCert),
+	}
+	var rows strings.Builder
+	for i, item := range items {
+		prefix := "[ ]"
+		if i == m.cursor {
+			prefix = "[>]"
+		}
+		line := fmt.Sprintf("%s %s", prefix, item)
+		if i == m.cursor {
+			rows.WriteString(sSelected.Render(line) + "\n")
+		} else {
+			rows.WriteString(sNormal.Render(line) + "\n")
+		}
+	}
+	panel := panelStyle(cBorderActive).Width(inner).Render(
+		title + "\n\n" + rows.String() + "\n" + sDim.Render("↑↓ navigate  ·  Enter/Space toggle  ·  Esc back"),
+	)
+	return panel
+}
+
 func (m tuiModel) viewSelectTransfer(w, h int) string {
 	labels := make([]string, len(m.transferOptions))
 	copy(labels, m.transferOptions)
@@ -1129,11 +1208,12 @@ func (m tuiModel) viewScanning(w, h int) string {
 	inner := w - 4 // slightly wider scan panel
 
 	opLabel := map[string]string{
-		"scan_ips":     "IP Scan",
-		"reload_pool":  "Pool Reload",
-		"inspect_pool": "Pool Inspect",
-		"tls_probe":    "TLS Hostname Probe",
-		"sni_scanner":  "SNI Scanner (TLS Hostname Probe)",
+		"scan_ips":       "IP Scan",
+		"reload_pool":    "Pool Reload",
+		"inspect_pool":   "Pool Inspect",
+		"tls_probe":      "TLS Hostname Probe",
+		"sni_scanner":    "SNI Scanner (TLS Hostname Probe)",
+		"desync_scanner": "Desync Pair Miner (Native)",
 	}[m.operationType]
 	if opLabel == "" {
 		opLabel = strings.ToUpper(m.scanKind) + " Proxy Scan"
@@ -1233,7 +1313,7 @@ func (m tuiModel) viewScanning(w, h int) string {
 	// Live hits appear under the activity log so the progress area stays clean
 	var liveRows strings.Builder
 	// For SNI scanner we only show passed (OK) entries in the live view.
-	if m.operationType == "sni_scanner" {
+	if m.operationType == "sni_scanner" || m.operationType == "desync_scanner" {
 		// collect last N passed entries
 		n := len(m.scanResults)
 		liveCount := h / 8
@@ -1327,11 +1407,12 @@ func (m tuiModel) viewScanResults(w, h int) string {
 	}
 
 	opLabel := map[string]string{
-		"scan_ips":     "IP Scan Results",
-		"reload_pool":  "Pool Reload",
-		"inspect_pool": "Pool Inspect",
-		"tls_probe":    "TLS Probe Results",
-		"sni_scanner":  "SNI Scanner Results (TLS Hostname Probe)",
+		"scan_ips":       "IP Scan Results",
+		"reload_pool":    "Pool Reload",
+		"inspect_pool":   "Pool Inspect",
+		"tls_probe":      "TLS Probe Results",
+		"sni_scanner":    "SNI Scanner Results (TLS Hostname Probe)",
+		"desync_scanner": "Desync Pair Miner Results",
 	}[m.operationType]
 	if opLabel == "" {
 		opLabel = "Scan Results"
@@ -1342,14 +1423,14 @@ func (m tuiModel) viewScanResults(w, h int) string {
 		body.WriteString(sError.Render("x "+m.scanErr.Error()) + "\n")
 	} else {
 		passedCount := len(m.scanResults)
-		if m.operationType == "sni_scanner" {
+		if m.operationType == "sni_scanner" || m.operationType == "desync_scanner" {
 			passedCount = m.scanHits
 		}
 		body.WriteString(sSuccess.Render(fmt.Sprintf("  Usable results: %d\n", passedCount)))
 		body.WriteString(sDim.Render("  failures stay in the log output only\n\n"))
 		// Build display list: for SNI show only passed (OK) entries, failures remain only in logs/files
 		displayResults := m.scanResults
-		if m.operationType == "sni_scanner" {
+		if m.operationType == "sni_scanner" || m.operationType == "desync_scanner" {
 			filt := make([]string, 0, len(m.scanResults))
 			for _, r := range m.scanResults {
 				if strings.Contains(r, " OK ") {
@@ -1500,6 +1581,38 @@ func (m tuiModel) viewManageRules(w, h int) string {
 	return panel + "\n\n" + sDim.Render("1-4 select  |  Esc back")
 }
 
+func (m tuiModel) viewManageDPISettings(w, h int) string {
+	inner := w - 6
+	state := m.dpiState
+	items := make([]string, 0, 11)
+	items = append(items, fmt.Sprintf("Target SNI/IP             [%s / %s]", state.DpiSNI, state.DpiIP))
+	for _, opt := range dpiStrategyCatalog {
+		mark := "[ ]"
+		if state.strategyEnabled(opt.ID) {
+			mark = "[x]"
+		}
+		items = append(items, fmt.Sprintf("%-9s %s", mark, strings.ToUpper(opt.ID)+" - "+opt.Description))
+	}
+	items = append(items, fmt.Sprintf("TCP Fragmentation        [%s]", boolLabel(state.DpiFragmentation, "ON", "OFF")))
+	items = append(items, fmt.Sprintf("DPI Logs Visibility      [%s]", boolLabel(state.AlwaysShowDpiLogs, "ON", "OFF (Auto-hide)")))
+	items = append(items, "Save and return")
+
+	var rows strings.Builder
+	for i, item := range items {
+		if i == m.cursor {
+			rows.WriteString(sSelected.Render(item) + "\n")
+		} else {
+			rows.WriteString(sNormal.Render(item) + "\n")
+		}
+	}
+
+	help := "↑↓ navigate  ·  Enter toggle/select  ·  t target  ·  s save  ·  Esc back"
+	panel := panelStyle(cBorderActive).Width(inner).Render(
+		sHeader.Render(" DESYNC SETTINGS ") + "\n\n" + rows.String(),
+	)
+	return panel + "\n\n" + sDim.Render(help)
+}
+
 func (m tuiModel) viewSimpleInput(w, h int, title, placeholder string) string {
 	inner := w - 6
 	panel := panelStyle(cBorderActive).Width(inner).Render(
@@ -1526,6 +1639,53 @@ func (m tuiModel) viewForceReroute(w, h int) string {
 	return panel + "\n\n" + sDim.Render("Enter confirm  |  Esc back")
 }
 
+func (m tuiModel) viewEditDPITarget(w, h int) string {
+	inner := w - 6
+	state := m.dpiState
+	var prompt string
+	if m.tiStep == 1 {
+		prompt = fmt.Sprintf("Current SNI: %s\n\nEnter DPI SNI", state.DpiSNI)
+	} else {
+		prompt = fmt.Sprintf("Current SNI: %s\nCurrent IP: %s\n\nEnter clean IP", state.DpiSNI, state.DpiIP)
+	}
+	panel := panelStyle(cBorderActive).Width(inner).Render(
+		sHeader.Render(" EDIT DPI TARGET ") + "\n\n" +
+			sInfo.Render("  "+prompt+"\n\n") +
+			"  " + m.ti.View(),
+	)
+	return panel + "\n\n" + sDim.Render("Enter confirm  |  Esc back")
+}
+
+func (m tuiModel) viewManageTLSProbe(w, h int) string {
+	inner := w - 6
+	custom := tlsprobe.LoadCustom(m.app.DataDir)
+	merged := tlsprobe.GetDomains(m.app.DataDir)
+	var rows strings.Builder
+	rows.WriteString(fmt.Sprintf("Custom domains: %d\nAll probe domains: %d\n\n", len(custom), len(merged)))
+	if len(custom) == 0 {
+		rows.WriteString("  (no custom probe domains yet)\n\n")
+	} else {
+		limit := len(custom)
+		if limit > 8 {
+			limit = 8
+		}
+		for i := 0; i < limit; i++ {
+			rows.WriteString(fmt.Sprintf("  [%d] %s\n", i+1, custom[i]))
+		}
+		if len(custom) > limit {
+			rows.WriteString(fmt.Sprintf("  ... and %d more\n\n", len(custom)-limit))
+		} else {
+			rows.WriteString("\n")
+		}
+	}
+	panel := panelStyle(cBorderActive).Width(inner).Render(
+		sHeader.Render(" MANAGE SNI PROBE DOMAINS ") + "\n\n" +
+			sInfo.Render(rows.String()) +
+			"  " + m.ti.View(),
+	)
+	return panel + "\n\n" + sDim.Render("Paste domains and press Enter to save  |  Esc back")
+}
+
 func (m tuiModel) viewSetProxyPort(w, h int) string {
 	inner := w - 6
 	panel := panelStyle(cBorderActive).Width(inner).Render(
@@ -1545,19 +1705,117 @@ func (m tuiModel) handleMenuScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
 	if !ok {
 		return m, nil
 	}
+	half := (len(m.menu) + 1) / 2
+	leftLen := half
+	rightLen := len(m.menu) - half
+	if m.menuCol == 0 && m.menuRow >= leftLen {
+		m.menuRow = leftLen - 1
+	}
+	if m.menuCol == 1 && m.menuRow >= rightLen {
+		m.menuRow = rightLen - 1
+	}
+	if m.menuRow < 0 {
+		m.menuRow = 0
+	}
+	if m.menuCol < 0 {
+		m.menuCol = 0
+	}
+	if m.menuCol > 1 {
+		m.menuCol = 1
+	}
+	if m.menuCol == 0 {
+		m.cursor = m.menuRow
+	} else {
+		m.cursor = half + m.menuRow
+	}
+	switch k.String() {
+	case "up", "k":
+		if m.menuRow > 0 {
+			m.menuRow--
+		}
+	case "down", "j":
+		if m.menuCol == 0 {
+			if m.menuRow+1 < leftLen {
+				m.menuRow++
+			}
+		} else if m.menuRow+1 < rightLen {
+			m.menuRow++
+		}
+	case "left", "h":
+		if m.menuCol == 1 {
+			m.menuCol = 0
+			if m.menuRow >= leftLen {
+				m.menuRow = leftLen - 1
+			}
+		}
+	case "right", "l":
+		if m.menuCol == 0 && m.menuRow < rightLen {
+			m.menuCol = 1
+			if m.menuRow >= rightLen {
+				m.menuRow = rightLen - 1
+			}
+		}
+	case "q", "0":
+		return m, tea.Quit
+	case "enter":
+		if m.menuCol == 0 {
+			m.cursor = m.menuRow
+		} else {
+			m.cursor = half + m.menuRow
+		}
+		return m.activateMenuItem()
+	}
+	if m.menuCol == 0 {
+		m.cursor = m.menuRow
+	} else {
+		m.cursor = half + m.menuRow
+	}
+	return m, nil
+}
+
+func (m tuiModel) handleToggleProbeFlagsScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
+	k, ok := msg.(tea.KeyMsg)
+	if !ok {
+		return m, nil
+	}
 	switch k.String() {
 	case "up", "k":
 		if m.cursor > 0 {
 			m.cursor--
 		}
 	case "down", "j":
-		if m.cursor < len(m.menu)-1 {
+		if m.cursor < 1 {
 			m.cursor++
 		}
-	case "q", "0":
-		return m, tea.Quit
-	case "enter":
-		return m.activateMenuItem()
+	case "1", "enter", " ":
+		if m.app != nil && m.app.Scanner != nil {
+			if m.cursor == 0 {
+				cur := m.app.Scanner.GetProbeRequireHTMLForDomainTokens()
+				newVal := !cur
+				m.app.Scanner.SetProbeRequireHTMLForDomainTokens(newVal)
+				m.addLog(fmt.Sprintf("Probe RequireHTML toggled -> %v", newVal))
+				m.app.Cfg.ProbeRequireHTMLForDomainTokens = newVal
+				_ = config.SaveToFile(m.app.Cfg, storage.GetPaths().ConfigFile)
+			} else {
+				cur := m.app.Scanner.GetProbeAcceptOnCertMatch()
+				newVal := !cur
+				m.app.Scanner.SetProbeAcceptOnCertMatch(newVal)
+				m.addLog(fmt.Sprintf("Probe AcceptOnCertMatch toggled -> %v", newVal))
+				m.app.Cfg.ProbeAcceptOnCertMatch = newVal
+				_ = config.SaveToFile(m.app.Cfg, storage.GetPaths().ConfigFile)
+			}
+		}
+	case "2":
+		if m.app != nil && m.app.Scanner != nil {
+			cur := m.app.Scanner.GetProbeAcceptOnCertMatch()
+			newVal := !cur
+			m.app.Scanner.SetProbeAcceptOnCertMatch(newVal)
+			m.addLog(fmt.Sprintf("Probe AcceptOnCertMatch toggled -> %v", newVal))
+			m.app.Cfg.ProbeAcceptOnCertMatch = newVal
+			_ = config.SaveToFile(m.app.Cfg, storage.GetPaths().ConfigFile)
+		}
+	case "esc", "b":
+		m.goBack()
 	}
 	return m, nil
 }
@@ -1596,6 +1854,10 @@ func (m tuiModel) activateMenuItem() (tuiModel, tea.Cmd) {
 	case "manage_rules":
 		m.pushScreen(screenManageRules)
 		m.tiStep = 1
+	case "edit_dpi_target":
+		m.pushScreen(screenEditDPITarget)
+		m.tiStep = 1
+		m.setupInput("Enter DPI SNI")
 	case "set_proxy_port":
 		m.pushScreen(screenSetProxyPort)
 		m.setupInput(fmt.Sprintf("Current %d - enter new port", m.app.Cfg.ProxyPort))
@@ -1604,21 +1866,31 @@ func (m tuiModel) activateMenuItem() (tuiModel, tea.Cmd) {
 	case "install_mmdf_ca":
 		return m, m.cmdInstallMMDFCA()
 	case "desync_scanner":
-		m.addLog("Starting Desync Scanner...")
-		return m, m.cmdBridgeAction("desync_scanner")
+		m.addLog("Desync Pair Miner opened (native flow)")
+		m.setToast(sInfo.Render("Native mode: scans SNI/IP pairs and writes desync_pairs.json"), 5*time.Second)
+		m.gotoScanMode("desync_scanner", "sni_scanner")
+		return m, nil
 	case "sni_scanner":
 		m.addLog("SNI Scanner (TLS Hostname Probe) selected")
 		m.gotoScanMode("sni_scanner", "sni_scanner")
 	case "config_maker":
-		m.addLog("Launching Config Maker...")
-		return m, m.cmdBridgeAction("config_maker")
+		m.pushScreen(screenConfigMaker)
+		m.initConfigMaker()
+		m.addLog("Opened Config Maker")
+		m.cursor = 0
 	case "manage_tls_probe":
 		m.pushScreen(screenManageTLSProbe)
 		m.tiStep = 1
 		m.setupInput("Add domain to TLS probe list (one per line)")
+	case "toggle_probe_flags":
+		m.pushScreen(screenToggleProbeFlags)
+		m.cursor = 0
+		m.tiStep = 0
 	case "configure_desync":
-		m.addLog("Configuring Desync...")
-		return m, m.cmdBridgeAction("desync_strategies")
+		m.pushScreen(screenManageDPISettings)
+		m.cursor = 0
+		m.dpiState = loadDPIState(m.app.DataDir)
+		m.addLog("Opened Desync Settings")
 	case "clear_cache":
 		m.app.Router.ClearAllRoutes()
 		m.app.Scanner.ClearCache()
@@ -1939,7 +2211,7 @@ func (m tuiModel) handleSelectPortsScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
 			m.scanConfig.PortsString = preset.ports
 			m.scanConfig.Ports = parsePorts(m.scanConfig.PortsString)
 		}
-		if m.operationType == "scan_ips" || m.operationType == "sni_scanner" {
+		if m.operationType == "scan_ips" || m.operationType == "sni_scanner" || m.operationType == "desync_scanner" {
 			m.pushScreen(screenSelectConcurrency)
 			m.cursor = 1
 		} else {
@@ -2058,6 +2330,16 @@ func (m tuiModel) handleSelectConcurrencyScreen(msg tea.Msg) (tuiModel, tea.Cmd)
 			m.addLog(fmt.Sprintf("Scan log file: %s", m.scanLogPath))
 			return m, m.cmdPoolOperation("sni_scanner", targets)
 		}
+		if m.operationType == "desync_scanner" {
+			endpointCount := len(targets) * len(ports)
+			timeout := scanTimeoutBudget(endpointCount)
+			m.startScanLogFile("desync_scanner", targets, ports, m.scanConfig.Concurrency, timeout)
+			m.app.Scanner.SetTargetPorts(ports)
+			m.scanMsgCh = make(chan tea.Msg, 65536)
+			m.addLog(fmt.Sprintf("Starting Desync Pair Miner: targets=%d ports=%d concurrency=%d", len(targets), len(ports), m.scanConfig.Concurrency))
+			m.addLog(fmt.Sprintf("Scan log file: %s", m.scanLogPath))
+			return m, m.cmdPoolOperation("desync_scanner", targets)
+		}
 		timeout := time.Duration(6+m.scanConfig.Concurrency/500) * time.Second
 		if timeout > 30*time.Second {
 			timeout = 30 * time.Second
@@ -2175,6 +2457,95 @@ func (m tuiModel) handleManageRulesScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
 			m.goBack()
 		}
 	}
+	return m, nil
+}
+
+func (m tuiModel) handleManageDPISettingsScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
+	if k, ok := msg.(tea.KeyMsg); ok {
+		switch k.String() {
+		case "up", "k":
+			if m.cursor > 0 {
+				m.cursor--
+			}
+		case "down", "j":
+			if m.cursor < len(dpiStrategyCatalog)+3 {
+				m.cursor++
+			}
+		case "t":
+			m.pushScreen(screenEditDPITarget)
+			m.tiStep = 1
+			m.setupInput("Enter DPI SNI")
+			return m, nil
+		case "s":
+			if err := saveDPIState(m.app.DataDir, m.dpiState); err != nil {
+				m.setToast(sError.Render("x Failed to save DPI settings"), 3*time.Second)
+			} else {
+				m.addLog("Saved desync settings")
+				m.setToast(sSuccess.Render("OK DPI settings saved"), 3*time.Second)
+			}
+			m.goBack()
+			return m, nil
+		case "enter", " ":
+			switch m.cursor {
+			case 0:
+				m.pushScreen(screenEditDPITarget)
+				m.tiStep = 1
+				m.setupInput("Enter DPI SNI")
+			case 1, 2, 3, 4, 5, 6, 7:
+				idx := m.cursor - 1
+				if idx >= 0 && idx < len(dpiStrategyCatalog) {
+					m.dpiState.toggleStrategy(dpiStrategyCatalog[idx].ID)
+					_ = saveDPIState(m.app.DataDir, m.dpiState)
+					m.addLog(fmt.Sprintf("Toggled DPI strategy: %s", dpiStrategyCatalog[idx].ID))
+				}
+			case 8:
+				m.dpiState.DpiFragmentation = !m.dpiState.DpiFragmentation
+				_ = saveDPIState(m.app.DataDir, m.dpiState)
+				m.addLog(fmt.Sprintf("DPI fragmentation -> %v", m.dpiState.DpiFragmentation))
+			case 9:
+				m.dpiState.AlwaysShowDpiLogs = !m.dpiState.AlwaysShowDpiLogs
+				_ = saveDPIState(m.app.DataDir, m.dpiState)
+				m.addLog(fmt.Sprintf("DPI logs visibility -> %v", m.dpiState.AlwaysShowDpiLogs))
+			case 10:
+				if err := saveDPIState(m.app.DataDir, m.dpiState); err != nil {
+					m.setToast(sError.Render("x Failed to save DPI settings"), 3*time.Second)
+				} else {
+					m.addLog("Saved desync settings")
+					m.setToast(sSuccess.Render("OK DPI settings saved"), 3*time.Second)
+				}
+				m.goBack()
+				return m, nil
+			}
+		case "q", "0", "esc":
+			m.goBack()
+			return m, nil
+		}
+	}
+	return m, nil
+}
+
+func (m tuiModel) handleEditDPITargetScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
+	if k, ok := msg.(tea.KeyMsg); ok && k.String() == "enter" {
+		raw := strings.TrimSpace(m.ti.Value())
+		if raw == "" {
+			m.goBack()
+			return m, nil
+		}
+		if m.tiStep == 1 {
+			m.dpiState.DpiSNI = raw
+			m.tiStep = 2
+			m.setupInput("Enter clean IP")
+			return m, nil
+		}
+		m.dpiState.DpiIP = raw
+		_ = saveDPIState(m.app.DataDir, m.dpiState)
+		m.addLog(fmt.Sprintf("Updated DPI target: sni=%s ip=%s", m.dpiState.DpiSNI, m.dpiState.DpiIP))
+		m.setToast(sSuccess.Render("OK DPI target saved"), 3*time.Second)
+		m.ti.Blur()
+		m.goBack()
+		return m, nil
+	}
+	m.ti, _ = m.ti.Update(msg)
 	return m, nil
 }
 
@@ -2368,17 +2739,37 @@ func (m tuiModel) handlePoolOperationComplete(msg poolOperationCompleteMsg) (tui
 		m.writeScanLogLine(fmt.Sprintf("[COMPLETE] %s failed: %v", msg.operationType, msg.err))
 	} else {
 		m.writeScanLogLine(fmt.Sprintf("[COMPLETE] %s done: %d items in %s", msg.operationType, len(m.scanResults), msg.duration))
-		if msg.operationType == "scan_ips" || msg.operationType == "sni_scanner" {
+		if msg.operationType == "scan_ips" || msg.operationType == "sni_scanner" || msg.operationType == "desync_scanner" {
 			scanKind := msg.operationType
 			if scanKind == "scan_ips" {
 				scanKind = "ipscan"
 			} else if scanKind == "sni_scanner" {
 				scanKind = "sniscan"
+			} else if scanKind == "desync_scanner" {
+				scanKind = "desyncscan"
 			}
 			if path, err := saveScanOutputResults(m.app.DataDir, scanKind, m.scanResults, m.operationType); err != nil {
 				m.addLog(fmt.Sprintf("Failed to save scan output: %v", err))
 			} else {
 				m.addLog(fmt.Sprintf("Saved scan output to %s", path))
+			}
+		}
+		if msg.operationType == "desync_scanner" {
+			pairs, snis, err := saveNativeDesyncArtifacts(m.app.DataDir, m.scanResults)
+			if err != nil {
+				m.addLog(fmt.Sprintf("Failed to save desync artifacts: %v", err))
+			} else {
+				m.addLog(fmt.Sprintf("Saved desync_pairs.json with %d pair(s); clean_snis.txt with %d SNI(s)", pairs, snis))
+				state := loadDPIState(m.app.DataDir)
+				pairsMap := loadDesyncPairs(m.app.DataDir)
+				keys := sortedDPIMapKeys(pairsMap)
+				if len(keys) > 0 && len(pairsMap[keys[0]]) > 0 {
+					state.DpiSNI = keys[0]
+					state.DpiIP = pairsMap[keys[0]][0]
+					_ = saveDPIState(m.app.DataDir, state)
+					m.dpiState = state
+					m.addLog(fmt.Sprintf("Updated DPI target to %s / %s", state.DpiSNI, state.DpiIP))
+				}
 			}
 		}
 	}
@@ -2495,7 +2886,7 @@ func (m tuiModel) cmdScanWithConfig(targets []string, cfg scanConfig, scanKind s
 }
 
 func (m tuiModel) cmdPoolOperation(opType string, asnNetworks []string) tea.Cmd {
-	if opType == "scan_ips" || opType == "sni_scanner" {
+	if opType == "scan_ips" || opType == "sni_scanner" || opType == "desync_scanner" {
 		cfg := m.scanConfig
 		scannerInst := m.app.Scanner
 		ch := m.scanMsgCh
@@ -2529,7 +2920,7 @@ func (m tuiModel) cmdPoolOperation(opType string, asnNetworks []string) tea.Cmd 
 					Timeout:       timeout,
 					EndpointCount: endpointCount,
 				}
-				if opType == "sni_scanner" {
+				if opType == "sni_scanner" || opType == "desync_scanner" {
 					// SNI scanner uses tlsprobe hostnames for the TLS hostname probe path.
 					domains := tlsprobe.GetDomains(m.app.DataDir)
 					opts.ProbeDomainsHTTPS = append([]string(nil), domains...)
@@ -2566,7 +2957,7 @@ func (m tuiModel) cmdPoolOperation(opType string, asnNetworks []string) tea.Cmd 
 					lastAt = now
 				}
 
-				if opType == "sni_scanner" {
+				if opType == "sni_scanner" || opType == "desync_scanner" {
 					// SNI scanner uses tlsprobe runner with TLS probe domains.
 					resCh := make(chan tlsprobe.ProbeResult, 1024)
 					go func() {
@@ -2873,6 +3264,8 @@ func (m *tuiModel) goBack() {
 	m.prevScreen = ""
 	m.screenChanged = true
 	m.cursor = 0
+	m.menuCol = 0
+	m.menuRow = 0
 }
 
 func (m *tuiModel) setupInput(placeholder string) {
@@ -2982,7 +3375,7 @@ func (m *tuiModel) startScanLogFile(scanKind string, targets []string, ports []i
 		m.scanOutputPath = outPath
 
 		// if SNI scanner, also prepare failed and CSV incremental files
-		if scanKind == "sni_scanner" || m.operationType == "sni_scanner" {
+		if scanKind == "sni_scanner" || scanKind == "desync_scanner" || m.operationType == "sni_scanner" || m.operationType == "desync_scanner" {
 			failedPath := filepath.Join(outDir, fmt.Sprintf("failed-%s-%s.txt", scanKind, stamp))
 			if absFailed, err := filepath.Abs(failedPath); err == nil {
 				failedPath = absFailed
@@ -3027,7 +3420,7 @@ func (m *tuiModel) appendNewScanResultsToFile() {
 		}
 
 		outEp := ep
-		if m.operationType != "sni_scanner" {
+		if m.operationType != "sni_scanner" && m.operationType != "desync_scanner" {
 			// strip tags and extract just IP:port
 			if parts := strings.Fields(ep); len(parts) > 1 && strings.Contains(parts[1], ":") {
 				outEp = parts[1] // handles "http 1.2.3.4:80 lat=..."
@@ -3102,6 +3495,68 @@ func (m *tuiModel) appendNewScanResultsToFile() {
 
 		m.scanOutputWritten[ep] = true
 	}
+}
+
+func saveNativeDesyncArtifacts(dataDir string, results []string) (pairCount int, sniCount int, err error) {
+	if dataDir == "" {
+		dataDir = "."
+	}
+	pairs := make(map[string][]string)
+	seen := make(map[string]map[string]struct{})
+
+	for _, line := range results {
+		line = strings.TrimSpace(line)
+		if line == "" || !strings.Contains(line, " OK ") {
+			continue
+		}
+		parts := strings.Fields(line)
+		if len(parts) < 2 {
+			continue
+		}
+		sni := strings.TrimSpace(parts[0])
+		ipport := strings.TrimSpace(parts[1])
+		if sni == "" || ipport == "" {
+			continue
+		}
+		host := ipport
+		if h, _, splitErr := net.SplitHostPort(ipport); splitErr == nil && h != "" {
+			host = h
+		}
+		if net.ParseIP(host) == nil {
+			continue
+		}
+		if _, ok := seen[sni]; !ok {
+			seen[sni] = make(map[string]struct{})
+		}
+		if _, ok := seen[sni][host]; ok {
+			continue
+		}
+		seen[sni][host] = struct{}{}
+		pairs[sni] = append(pairs[sni], host)
+	}
+
+	if len(pairs) == 0 {
+		return 0, 0, nil
+	}
+
+	for sni := range pairs {
+		sort.Strings(pairs[sni])
+		pairCount += len(pairs[sni])
+	}
+	keys := sortedDPIMapKeys(pairs)
+	sniCount = len(keys)
+
+	pairsPath := filepath.Join(dataDir, "desync_pairs.json")
+	if err := storage.AtomicWriteJSON(pairsPath, pairs); err != nil {
+		return 0, 0, err
+	}
+
+	cleanPath := filepath.Join(dataDir, "clean_snis.txt")
+	if err := storage.AtomicWriteText(cleanPath, strings.Join(keys, "\n")+"\n"); err != nil {
+		return 0, 0, err
+	}
+
+	return pairCount, sniCount, nil
 }
 
 func (m *tuiModel) appendTransferLogLineFromScanLog(line string) {

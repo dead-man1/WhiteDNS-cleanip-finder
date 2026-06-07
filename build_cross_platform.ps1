@@ -42,20 +42,33 @@ function Invoke-CrossPlatformBuild {
     
     $OldGOOS = $Env:GOOS
     $OldGOARCH = $Env:GOARCH
+    $OldCGOEnabled = $Env:CGO_ENABLED
+    $OldGO111MODULE = $Env:GO111MODULE
     $Env:GOOS = $OS
     $Env:GOARCH = $Arch
+    $Env:CGO_ENABLED = "0"
+    $Env:GO111MODULE = "on"
     
     $OutputPath = Join-Path $BuildDir $OutputName
     
     $StartTime = Get-Date
     
     try {
-        $BuildCmd = "go build -o `"$OutputPath`" -ldflags=`"-s -w`" ./cmd/whitedns"
+        $BuildArgs = @(
+            "build",
+            "-trimpath",
+            "-ldflags=-s -w",
+            "-o", $OutputPath,
+            "./cmd/whitedns"
+        )
         if ($VerboseOutput) {
-            Write-Host "  Command: $BuildCmd" -ForegroundColor Gray
+            Write-Host "  Command: go $($BuildArgs -join ' ')" -ForegroundColor Gray
         }
         
-        Invoke-Expression $BuildCmd -ErrorAction Stop
+        & go @BuildArgs
+        if ($LASTEXITCODE -ne 0) {
+            throw "go build failed with exit code $LASTEXITCODE"
+        }
         
         $EndTime = Get-Date
         $Duration = ($EndTime - $StartTime).TotalSeconds
@@ -92,6 +105,20 @@ function Invoke-CrossPlatformBuild {
         else {
             $Env:GOARCH = $OldGOARCH
         }
+
+        if ([string]::IsNullOrEmpty($OldCGOEnabled)) {
+            Remove-Item Env:CGO_ENABLED -ErrorAction SilentlyContinue
+        }
+        else {
+            $Env:CGO_ENABLED = $OldCGOEnabled
+        }
+
+        if ([string]::IsNullOrEmpty($OldGO111MODULE)) {
+            Remove-Item Env:GO111MODULE -ErrorAction SilentlyContinue
+        }
+        else {
+            $Env:GO111MODULE = $OldGO111MODULE
+        }
     }
 }
 
@@ -125,6 +152,47 @@ foreach ($Build in $Builds) {
         $FailCount++
     }
 }
+
+    # Copy Python bridge/runtime sources so the built app can run standalone.
+    Write-Host "`n[*] Copying Python runtime sources to builds directory..." -ForegroundColor Yellow
+
+    $PythonCopyRoots = @(
+        (Join-Path $ScriptDir "python_bridge.py"),
+        (Join-Path $ScriptDir "cores"),
+        (Join-Path $ScriptDir "utils"),
+        (Join-Path $ScriptDir "config maker")
+    )
+
+    foreach ($SourcePath in $PythonCopyRoots) {
+        if (-not (Test-Path $SourcePath)) {
+            Write-Host "  [WARN] Missing source path: $SourcePath" -ForegroundColor Yellow
+            continue
+        }
+
+        $RelativeName = Split-Path $SourcePath -Leaf
+        $DestPath = Join-Path $BuildDir $RelativeName
+        try {
+            if (Test-Path $DestPath) {
+                Remove-Item $DestPath -Recurse -Force -ErrorAction Stop
+            }
+            Copy-Item $SourcePath -Destination $DestPath -Recurse -Force -ErrorAction Stop
+            Write-Host "  [OK] Copied $RelativeName" -ForegroundColor Green
+        }
+        catch {
+            Write-Host "  [WARN] Could not copy ${RelativeName}: $($_.Exception.Message)" -ForegroundColor Yellow
+        }
+    }
+
+    # Copy any additional top-level Python helpers into the package.
+    Get-ChildItem -Path $ScriptDir -File -Filter *.py | Where-Object { $_.FullName -notlike "$BuildDir*" } | ForEach-Object {
+        $DestPath = Join-Path $BuildDir $_.Name
+        try {
+            Copy-Item $_.FullName -Destination $DestPath -Force -ErrorAction Stop
+        }
+        catch {
+            Write-Host "  [WARN] Could not copy Python helper $($_.Name): $($_.Exception.Message)" -ForegroundColor Yellow
+        }
+    }
 
     # Copy IranASNs and assets to builds folder
     Write-Host "`n[*] Copying data files to builds directory..." -ForegroundColor Yellow

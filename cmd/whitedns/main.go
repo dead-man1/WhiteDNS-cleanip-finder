@@ -44,6 +44,24 @@ func main() {
 	}
 
 	dataDir := initStorage()
+	// After storage is initialized, try loading persisted config and use it
+	// to override runtime defaults. Persisted config is optional.
+	paths := storage.GetPaths()
+	if paths != nil {
+		if persisted, err := config.LoadFromFile(paths.ConfigFile); err == nil {
+			// If the persisted config is non-empty (ProxyHost or ProxyPort set)
+			// prefer persisted values. Otherwise keep env/flags.
+			if persisted.ProxyHost != "" {
+				cfg.ProxyHost = persisted.ProxyHost
+			}
+			if persisted.ProxyPort != 0 {
+				cfg.ProxyPort = persisted.ProxyPort
+			}
+			// Persisted scanner toggles override defaults
+			cfg.ProbeRequireHTMLForDomainTokens = persisted.ProbeRequireHTMLForDomainTokens
+			cfg.ProbeAcceptOnCertMatch = persisted.ProbeAcceptOnCertMatch
+		}
+	}
 	if mode == "proxy" {
 		runProxy(cfg)
 		return
@@ -79,7 +97,7 @@ func runProxy(cfg config.Config) {
 }
 
 func mustBuildApp(cfg config.Config, dataDir string) *ui.App {
-	scannerInst, routerInst, asnEngine, ruleEngine := buildServices(dataDir)
+	scannerInst, routerInst, asnEngine, ruleEngine := buildServices(cfg, dataDir)
 	projectRoot, goPortRoot := detectRoots()
 
 	return &ui.App{
@@ -93,8 +111,8 @@ func mustBuildApp(cfg config.Config, dataDir string) *ui.App {
 	}
 }
 
-func buildServices(dataDir string) (*scanner.Scanner, *router.Router, *asn.ASNEngine, *rules.RuleEngine) {
-	scannerInst := scanner.NewScanner(defaultScannerConfig())
+func buildServices(cfg config.Config, dataDir string) (*scanner.Scanner, *router.Router, *asn.ASNEngine, *rules.RuleEngine) {
+	scannerInst := scanner.NewScanner(defaultScannerConfig(cfg))
 	routerInst := router.NewRouter(defaultRouterConfig())
 	asnEngine := asn.NewASNEngine(dataDir)
 	ruleEngine := rules.NewRuleEngine()
@@ -133,7 +151,7 @@ func buildServices(dataDir string) (*scanner.Scanner, *router.Router, *asn.ASNEn
 	return scannerInst, routerInst, asnEngine, ruleEngine
 }
 
-func defaultScannerConfig() *scanner.ScannerConfig {
+func defaultScannerConfig(cfg config.Config) *scanner.ScannerConfig {
 	return &scanner.ScannerConfig{
 		ProbeTimeout:        2500 * time.Millisecond,
 		ProbeRetries:        2,
@@ -145,6 +163,8 @@ func defaultScannerConfig() *scanner.ScannerConfig {
 		NmapTiming:          "-T4",
 		NmapRetries:         2,
 		TargetPorts:         []int{443, 2053, 2083, 2087, 2096, 8443},
+		ProbeRequireHTMLForDomainTokens: cfg.ProbeRequireHTMLForDomainTokens,
+		ProbeAcceptOnCertMatch:          cfg.ProbeAcceptOnCertMatch,
 	}
 }
 
@@ -162,6 +182,14 @@ func defaultRouterConfig() *router.RouterConfig {
 }
 
 func detectRoots() (string, string) {
+	if exePath, err := os.Executable(); err == nil {
+		exeDir := filepath.Dir(exePath)
+		if _, err := os.Stat(filepath.Join(exeDir, "python_bridge.py")); err == nil {
+			projectRoot := filepath.Dir(exeDir)
+			return projectRoot, exeDir
+		}
+	}
+
 	wd, err := os.Getwd()
 	if err != nil {
 		return ".", "."

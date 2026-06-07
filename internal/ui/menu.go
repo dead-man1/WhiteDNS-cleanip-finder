@@ -62,6 +62,8 @@ func (a *App) handleWhite(choice string, uiMode *string) bool {
 	switch choice {
 	case "1":
 		a.handleScanMenu()
+	case "t":
+		a.handleToggleProbeFlags()
 	case "2":
 		a.handleReloadPool()
 	case "3":
@@ -104,6 +106,8 @@ func (a *App) handleDesync(choice string, uiMode *string) bool {
 	switch choice {
 	case "1":
 		a.handleConfigureDesync()
+	case "t":
+		a.handleToggleProbeFlags()
 	case "2":
 		a.handleSelectDPITarget()
 	case "3":
@@ -193,6 +197,7 @@ func printMainMenu(uiMode string) {
 	fmt.Println(" [9] Manage Routing Rules (Whitelist/Blacklist)")
 	fmt.Println(" [s] SOCKS5 Proxy Scanner")
 	fmt.Println(" [h] HTTP-Only Proxy Scanner")
+	fmt.Println(" [t] Settings: Probe Heuristics")
 	fmt.Println(" [c] Install MMDF CA (Meet / YouTube)")
 	fmt.Println("\n Launch")
 	fmt.Println(" [w] Start Proxy (White Routing)")
@@ -366,6 +371,46 @@ func (a *App) handleInstantConnect() {
 	}
 	fmt.Printf("[+] Added %d endpoints to routing cache\n", count)
 	time.Sleep(1000 * time.Millisecond)
+}
+
+func (a *App) handleToggleProbeFlags() {
+	// Show current values and allow toggling
+	fmt.Println("\n[*] Probe Heuristics")
+	requireHTML := "OFF"
+	if a.Scanner != nil && a.Scanner.GetProbeRequireHTMLForDomainTokens() {
+		requireHTML = "ON"
+	}
+	certMatch := "OFF"
+	if a.Scanner != nil && a.Scanner.GetProbeAcceptOnCertMatch() {
+		certMatch = "ON"
+	}
+	fmt.Printf("[1] Require HTML for domain tokens: %s\n", requireHTML)
+	fmt.Printf("[2] Accept on TLS cert match:    %s\n", certMatch)
+	fmt.Println("Enter number to toggle (1/2) or press Enter to return:")
+	choice := strings.TrimSpace(a.readLineInput())
+	switch choice {
+	case "1":
+		if a.Scanner != nil {
+			newVal := !a.Scanner.GetProbeRequireHTMLForDomainTokens()
+			a.Scanner.SetProbeRequireHTMLForDomainTokens(newVal)
+			a.Cfg.ProbeRequireHTMLForDomainTokens = newVal
+			// Persist
+			_ = config.SaveToFile(a.Cfg, storage.GetPaths().ConfigFile)
+			fmt.Println("Toggled Require HTML for domain tokens ->", newVal)
+		}
+	case "2":
+		if a.Scanner != nil {
+			newVal := !a.Scanner.GetProbeAcceptOnCertMatch()
+			a.Scanner.SetProbeAcceptOnCertMatch(newVal)
+			a.Cfg.ProbeAcceptOnCertMatch = newVal
+			// Persist
+			_ = config.SaveToFile(a.Cfg, storage.GetPaths().ConfigFile)
+			fmt.Println("Toggled Accept on TLS cert match ->", newVal)
+		}
+	default:
+		fmt.Println("No changes")
+	}
+	time.Sleep(800 * time.Millisecond)
 }
 
 func (a *App) handleForceReroute() {
@@ -1367,7 +1412,7 @@ func saveScanOutputResults(dataDir, scanKind string, endpoints []string, operati
 
 	var cleaned []string
 	for _, ep := range endpoints {
-		if operationType != "sni_scanner" {
+		if operationType != "sni_scanner" && operationType != "desync_scanner" {
 			if parts := strings.Fields(ep); len(parts) > 1 && strings.Contains(parts[1], ":") {
 				cleaned = append(cleaned, parts[1])
 			} else if len(parts) > 0 && strings.Contains(parts[0], ":") {
@@ -1392,7 +1437,7 @@ func saveScanOutputResults(dataDir, scanKind string, endpoints []string, operati
 	}
 
 	// If SNI scanner, also write a CSV containing status per-host
-	if operationType == "sni_scanner" {
+	if operationType == "sni_scanner" || operationType == "desync_scanner" {
 		csvLines := make([]string, 0, len(endpoints)+1)
 		csvLines = append(csvLines, "hostname,ip,port,status,latency_ms,tls_version,http_status")
 		for _, ep := range endpoints {

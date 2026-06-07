@@ -4,6 +4,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"whitedns-go/internal/storage"
 )
 
 // MMDFProfile represents a domain fronting profile
@@ -19,6 +20,9 @@ type MMDFProfile struct {
 type Config struct {
 	ProxyHost string
 	ProxyPort int
+	// Persisted scanner toggles
+	ProbeRequireHTMLForDomainTokens bool
+	ProbeAcceptOnCertMatch          bool
 }
 
 // MMDFDomainExcludes lists domains that don't support domain fronting
@@ -98,7 +102,28 @@ func Load() Config {
 	return Config{
 		ProxyHost: host,
 		ProxyPort: port,
+		// conservative defaults
+		ProbeRequireHTMLForDomainTokens: true,
+		ProbeAcceptOnCertMatch:          true,
 	}
+}
+
+// LoadFromFile reads a JSON config file into Config. If the file doesn't
+// exist, returns an empty Config and no error.
+func LoadFromFile(path string) (Config, error) {
+	var cfg Config
+	if !storage.FileExists(path) {
+		return cfg, nil
+	}
+	if err := storage.ReadJSON(path, &cfg); err != nil {
+		return cfg, err
+	}
+	return cfg, nil
+}
+
+// SaveToFile writes the Config to the given path atomically.
+func SaveToFile(cfg Config, path string) error {
+	return storage.AtomicWriteJSON(path, cfg)
 }
 
 func (c Config) ListenAddr() string {

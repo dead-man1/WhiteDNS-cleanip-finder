@@ -155,6 +155,9 @@ type ScannerConfig struct {
 	// Probe domains
 	ProbeDomainsExtra []string
 	TargetPorts       []int
+	// Conservative robustness flags
+	ProbeRequireHTMLForDomainTokens bool // require HTML evidence when using domain token matches
+	ProbeAcceptOnCertMatch          bool // accept when TLS certificate matches probe domain
 }
 
 // ProbeDomainInfo holds info about a domain to probe
