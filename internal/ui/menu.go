@@ -18,6 +18,7 @@ import (
 
 	"whitedns-go/internal/asn"
 	"whitedns-go/internal/bridge"
+	"whitedns-go/internal/bundledata"
 	"whitedns-go/internal/config"
 	"whitedns-go/internal/mmdf"
 	"whitedns-go/internal/proxy"
@@ -683,6 +684,10 @@ func (a *App) pickCleanEdgeIP() (string, error) {
 }
 
 func loadSNIPatterns() []string {
+	if bundled, err := bundledata.LoadSNIPatterns(); err == nil && len(bundled) > 0 {
+		return bundled
+	}
+
 	paths := []string{filepath.Join("assets", "cf-domains.txt"), filepath.Join("..", "assets", "cf-domains.txt")}
 	for _, path := range paths {
 		data, err := os.ReadFile(path)

@@ -19,6 +19,7 @@ __pycache__/
 
 # Logs and runtime output
 *.log
+*.csv
 *.tmp
 *.pid
 *.seed

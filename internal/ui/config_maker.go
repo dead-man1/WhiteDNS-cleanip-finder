@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"whitedns-go/internal/bundledata"
 	"whitedns-go/internal/storage"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -561,22 +562,33 @@ func configMakerReadFile(path string) string {
 }
 
 func configMakerSupportDir(m tuiModel) string {
-	if wd, err := os.Getwd(); err == nil {
-		candidate := filepath.Join(wd, "config maker")
-		if st, e := os.Stat(candidate); e == nil && st.IsDir() {
+	if m.app != nil && m.app.DataDir != "" {
+		if dir, err := bundledata.EnsureConfigMakerDataDir(m.app.DataDir); err == nil && strings.TrimSpace(dir) != "" {
+			return dir
+		}
+		candidate := filepath.Join(m.app.DataDir, "config maker")
+		if err := os.MkdirAll(candidate, 0o755); err == nil {
 			return candidate
 		}
 	}
-	if m.app != nil && m.app.DataDir != "" {
-		return m.app.DataDir
-	}
 	if wd, err := os.Getwd(); err == nil {
+		candidate := filepath.Join(wd, "config maker")
+		if err := os.MkdirAll(candidate, 0o755); err == nil {
+			return candidate
+		}
 		return wd
 	}
 	return "."
 }
 
 func configMakerListTXTFiles(folder string) []string {
+	if strings.TrimSpace(folder) == "" {
+		return nil
+	}
+	if err := os.MkdirAll(folder, 0o755); err != nil {
+		return nil
+	}
+
 	entries, err := os.ReadDir(folder)
 	if err != nil {
 		return nil

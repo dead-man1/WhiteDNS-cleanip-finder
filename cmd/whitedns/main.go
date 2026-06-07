@@ -6,10 +6,12 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"whitedns-go/internal/asn"
 	"whitedns-go/internal/bridge"
+	"whitedns-go/internal/bundledata"
 	"whitedns-go/internal/config"
 	"whitedns-go/internal/proxy"
 	"whitedns-go/internal/router"
@@ -82,11 +84,27 @@ func parseFlags(cfg config.Config) (string, string, int) {
 }
 
 func initStorage() string {
-	dataDir := filepath.Join(os.Getenv("HOME"), ".whitedns")
+	dataDir := resolveDataDir()
 	if err := storage.InitPaths(dataDir); err != nil {
 		log.Printf("[!] Warning: Failed to init storage: %v", err)
 	}
+	if err := bundledata.EnsureRuntimeData(dataDir); err != nil {
+		log.Printf("[!] Warning: Failed to seed bundled runtime files: %v", err)
+	}
 	return dataDir
+}
+
+func resolveDataDir() string {
+	if override := strings.TrimSpace(os.Getenv("WHITE_PROXY_HOME")); override != "" {
+		return override
+	}
+	if cfgDir, err := os.UserConfigDir(); err == nil && strings.TrimSpace(cfgDir) != "" {
+		return filepath.Join(cfgDir, "whitedns")
+	}
+	if home, err := os.UserHomeDir(); err == nil && strings.TrimSpace(home) != "" {
+		return filepath.Join(home, ".whitedns")
+	}
+	return ".whitedns"
 }
 
 func runProxy(cfg config.Config) {
@@ -153,16 +171,16 @@ func buildServices(cfg config.Config, dataDir string) (*scanner.Scanner, *router
 
 func defaultScannerConfig(cfg config.Config) *scanner.ScannerConfig {
 	return &scanner.ScannerConfig{
-		ProbeTimeout:        2500 * time.Millisecond,
-		ProbeRetries:        2,
-		MaxConcurrentProbes: 4,
-		ProbeIntervalMs:     100,
-		MasscanRate:         1000,
-		MasscanRetries:      2,
-		MasscanWaitSec:      10,
-		NmapTiming:          "-T4",
-		NmapRetries:         2,
-		TargetPorts:         []int{443, 2053, 2083, 2087, 2096, 8443},
+		ProbeTimeout:                    2500 * time.Millisecond,
+		ProbeRetries:                    2,
+		MaxConcurrentProbes:             4,
+		ProbeIntervalMs:                 100,
+		MasscanRate:                     1000,
+		MasscanRetries:                  2,
+		MasscanWaitSec:                  10,
+		NmapTiming:                      "-T4",
+		NmapRetries:                     2,
+		TargetPorts:                     []int{443, 2053, 2083, 2087, 2096, 8443},
 		ProbeRequireHTMLForDomainTokens: cfg.ProbeRequireHTMLForDomainTokens,
 		ProbeAcceptOnCertMatch:          cfg.ProbeAcceptOnCertMatch,
 	}

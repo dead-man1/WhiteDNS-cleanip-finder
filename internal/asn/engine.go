@@ -2,6 +2,7 @@ package asn
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/csv"
 	"fmt"
 	"io"
@@ -12,6 +13,8 @@ import (
 	"sort"
 	"strings"
 	"sync"
+
+	"whitedns-go/internal/bundledata"
 )
 
 // ASNInfo holds ASN information
@@ -114,14 +117,26 @@ func (e *ASNEngine) Load() error {
 		return nil
 	}
 
-	v4Path := filepath.Join(e.asnPath, "filtered_ipv4.csv")
-	if err := e.loadCSV(v4Path, true); err != nil {
-		fmt.Printf("[!] Warning: Could not load IPv4 ASN data: %v\n", err)
+	if data, err := bundledata.ASNIPv4CSV(); err == nil {
+		if err := e.loadCSVReader(bytes.NewReader(data), true); err != nil {
+			fmt.Printf("[!] Warning: Could not load bundled IPv4 ASN data: %v\n", err)
+		}
+	} else {
+		v4Path := filepath.Join(e.asnPath, "filtered_ipv4.csv")
+		if err := e.loadCSV(v4Path, true); err != nil {
+			fmt.Printf("[!] Warning: Could not load IPv4 ASN data: %v\n", err)
+		}
 	}
 
-	v6Path := filepath.Join(e.asnPath, "filtered_ipv6.csv")
-	if err := e.loadCSV(v6Path, false); err != nil {
-		fmt.Printf("[!] Warning: Could not load IPv6 ASN data: %v\n", err)
+	if data, err := bundledata.ASNIPv6CSV(); err == nil {
+		if err := e.loadCSVReader(bytes.NewReader(data), false); err != nil {
+			fmt.Printf("[!] Warning: Could not load bundled IPv6 ASN data: %v\n", err)
+		}
+	} else {
+		v6Path := filepath.Join(e.asnPath, "filtered_ipv6.csv")
+		if err := e.loadCSV(v6Path, false); err != nil {
+			fmt.Printf("[!] Warning: Could not load IPv6 ASN data: %v\n", err)
+		}
 	}
 
 	e.loaded = true
@@ -136,7 +151,12 @@ func (e *ASNEngine) loadCSV(filePath string, isV4 bool) error {
 	}
 	defer file.Close()
 
-	reader := bufio.NewReader(file)
+	return e.loadCSVReader(file, isV4)
+}
+
+func (e *ASNEngine) loadCSVReader(reader io.Reader, isV4 bool) error {
+	fileReader := bufio.NewReader(reader)
+
 	lineNo := 0
 
 	parseLine := func(line string) ([]string, error) {
@@ -151,7 +171,7 @@ func (e *ASNEngine) loadCSV(filePath string, isV4 bool) error {
 	}
 
 	for {
-		line, readErr := reader.ReadString('\n')
+		line, readErr := fileReader.ReadString('\n')
 		if readErr != nil && readErr != io.EOF {
 			if len(line) == 0 {
 				return readErr

@@ -2,6 +2,7 @@ package ui
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/csv"
 	"fmt"
 	"io"
@@ -15,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"whitedns-go/internal/bundledata"
 	"whitedns-go/internal/config"
 	"whitedns-go/internal/mmdf"
 	"whitedns-go/internal/scanner"
@@ -435,15 +437,20 @@ func NewTUI(a *App) *tuiModel {
 // ------------------------------------------------------------
 
 func (m *tuiModel) loadASNFile() {
-	asnFile := resolveASNCSVPath(m.app.DataDir)
-	f, err := os.Open(asnFile)
-	if err != nil {
-		m.addLog(fmt.Sprintf("Warning: could not load ASN file: %v", err))
-		return
+	var r *bufio.Reader
+	asnData, bundleErr := bundledata.ASNIPv4CSV()
+	if bundleErr == nil {
+		r = bufio.NewReader(bytes.NewReader(asnData))
+	} else {
+		asnFile := resolveASNCSVPath(m.app.DataDir)
+		f, err := os.Open(asnFile)
+		if err != nil {
+			m.addLog(fmt.Sprintf("Warning: could not load ASN file: %v", err))
+			return
+		}
+		defer f.Close()
+		r = bufio.NewReader(f)
 	}
-	defer f.Close()
-
-	r := bufio.NewReader(f)
 	parseLine := func(line string) ([]string, error) {
 		line = strings.TrimSpace(line)
 		if line == "" {

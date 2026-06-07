@@ -153,85 +153,11 @@ foreach ($Build in $Builds) {
     }
 }
 
-    # Copy Python bridge/runtime sources so the built app can run standalone.
-    Write-Host "`n[*] Copying Python runtime sources to builds directory..." -ForegroundColor Yellow
+    Write-Host "`n[*] Standalone package mode:" -ForegroundColor Yellow
+    Write-Host "  [OK] No sidecar Python/runtime folders are copied to builds/" -ForegroundColor Green
 
-    $PythonCopyRoots = @(
-        (Join-Path $ScriptDir "python_bridge.py"),
-        (Join-Path $ScriptDir "cores"),
-        (Join-Path $ScriptDir "utils"),
-        (Join-Path $ScriptDir "config maker")
-    )
-
-    foreach ($SourcePath in $PythonCopyRoots) {
-        if (-not (Test-Path $SourcePath)) {
-            Write-Host "  [WARN] Missing source path: $SourcePath" -ForegroundColor Yellow
-            continue
-        }
-
-        $RelativeName = Split-Path $SourcePath -Leaf
-        $DestPath = Join-Path $BuildDir $RelativeName
-        try {
-            if (Test-Path $DestPath) {
-                Remove-Item $DestPath -Recurse -Force -ErrorAction Stop
-            }
-            Copy-Item $SourcePath -Destination $DestPath -Recurse -Force -ErrorAction Stop
-            Write-Host "  [OK] Copied $RelativeName" -ForegroundColor Green
-        }
-        catch {
-            Write-Host "  [WARN] Could not copy ${RelativeName}: $($_.Exception.Message)" -ForegroundColor Yellow
-        }
-    }
-
-    # Copy any additional top-level Python helpers into the package.
-    Get-ChildItem -Path $ScriptDir -File -Filter *.py | Where-Object { $_.FullName -notlike "$BuildDir*" } | ForEach-Object {
-        $DestPath = Join-Path $BuildDir $_.Name
-        try {
-            Copy-Item $_.FullName -Destination $DestPath -Force -ErrorAction Stop
-        }
-        catch {
-            Write-Host "  [WARN] Could not copy Python helper $($_.Name): $($_.Exception.Message)" -ForegroundColor Yellow
-        }
-    }
-
-    # Copy IranASNs and assets to builds folder
-    Write-Host "`n[*] Copying data files to builds directory..." -ForegroundColor Yellow
-
-    $IranASNsSource = Join-Path $ScriptDir "IranASNs"
-    $IranASNsDest = Join-Path $BuildDir "IranASNs"
-    if (Test-Path $IranASNsSource) {
-        try {
-            if (Test-Path $IranASNsDest) {
-                Remove-Item $IranASNsDest -Recurse -Force -ErrorAction Stop
-            }
-            Copy-Item $IranASNsSource -Destination $IranASNsDest -Recurse -Force -ErrorAction Stop
-            Write-Host "  [OK] Copied IranASNs folder" -ForegroundColor Green
-        }
-        catch {
-            Write-Host "  [WARN] Could not refresh IranASNs folder: $($_.Exception.Message)" -ForegroundColor Yellow
-        }
-    }
-    else {
-        Write-Host "  [WARN] IranASNs folder not found at $IranASNsSource" -ForegroundColor Yellow
-    }
-
-    $AssetsSource = Join-Path $ScriptDir "assets"
-    $AssetsDest = Join-Path $BuildDir "assets"
-    if (Test-Path $AssetsSource) {
-        try {
-            if (Test-Path $AssetsDest) {
-                Remove-Item $AssetsDest -Recurse -Force -ErrorAction Stop
-            }
-            Copy-Item $AssetsSource -Destination $AssetsDest -Recurse -Force -ErrorAction Stop
-            Write-Host "  [OK] Copied assets folder" -ForegroundColor Green
-        }
-        catch {
-            Write-Host "  [WARN] Could not refresh assets folder: $($_.Exception.Message)" -ForegroundColor Yellow
-        }
-    }
-    else {
-        Write-Host "  [WARN] assets folder not found at $AssetsSource" -ForegroundColor Yellow
-    }
+    Write-Host "`n[*] Bundled data notice:" -ForegroundColor Yellow
+    Write-Host "  [OK] ASN CSV and assets/cf-domains.txt are embedded into each binary" -ForegroundColor Green
 
 # Summary
 Write-Host @"
@@ -250,13 +176,9 @@ Failed: $FailCount
             $Size = [math]::Round($_.Length / 1MB, 2)
             Write-Host "  - $($_.Name) ($Size MB)" -ForegroundColor Green
         }
-        Write-Host "`nData files:" -ForegroundColor Green
-        if (Test-Path $IranASNsDest) {
-            Write-Host "  - IranASNs/" -ForegroundColor Green
-        }
-        if (Test-Path $AssetsDest) {
-            Write-Host "  - assets/" -ForegroundColor Green
-        }
+        Write-Host "`nRuntime behavior:" -ForegroundColor Green
+        Write-Host "  - ASN data and cf-domains are loaded from inside each binary" -ForegroundColor Green
+        Write-Host "  - Config-maker consumes user-provided inputs/files and writes output under app data" -ForegroundColor Green
         exit 0
     }
     else {
