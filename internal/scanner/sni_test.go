@@ -1,10 +1,9 @@
 package scanner
 
 import (
+	"crypto/tls"
 	"crypto/x509"
 	"testing"
-	"time"
-	"crypto/tls"
 )
 
 func TestCertMatchesDomainTrue(t *testing.T) {
@@ -33,16 +32,46 @@ func TestLooksLikeHTMLResponse(t *testing.T) {
 }
 
 func TestNewScannerDefaults(t *testing.T) {
-	cfg := &ScannerConfig{}
-	s := NewScanner(cfg)
+	s := NewScanner(nil)
 	_ = s
-	// NewScanner should set package flags from cfg (defaults to true)
 	if !probeRequireHTMLForDomainTokens {
-		t.Fatalf("expected probeRequireHTMLForDomainTokens to be true by default")
+		t.Fatalf("expected probeRequireHTMLForDomainTokens to default true when config is nil")
 	}
 	if !probeAcceptOnCertMatch {
-		t.Fatalf("expected probeAcceptOnCertMatch to be true by default")
+		t.Fatalf("expected probeAcceptOnCertMatch to default true when config is nil")
 	}
-	// allow a quick no-op sleep to simulate scanner lifecycle
-	time.Sleep(10 * time.Millisecond)
+}
+
+func TestNewScannerRespectsConfigFlags(t *testing.T) {
+	cfg := &ScannerConfig{
+		ProbeRequireHTMLForDomainTokens: false,
+		ProbeAcceptOnCertMatch:          false,
+	}
+	s := NewScanner(cfg)
+	_ = s
+	if probeRequireHTMLForDomainTokens {
+		t.Fatalf("expected probeRequireHTMLForDomainTokens to follow config=false")
+	}
+	if probeAcceptOnCertMatch {
+		t.Fatalf("expected probeAcceptOnCertMatch to follow config=false")
+	}
+}
+
+func TestMinimumDomainAcceptScore(t *testing.T) {
+	tests := []struct {
+		domainCount int
+		want        int
+	}{
+		{domainCount: 1, want: 1},
+		{domainCount: 2, want: 2},
+		{domainCount: 6, want: 2},
+		{domainCount: 9, want: 1},
+		{domainCount: 10, want: 1},
+	}
+
+	for _, tc := range tests {
+		if got := minimumDomainAcceptScore(tc.domainCount); got != tc.want {
+			t.Fatalf("minimumDomainAcceptScore(%d) = %d, want %d", tc.domainCount, got, tc.want)
+		}
+	}
 }

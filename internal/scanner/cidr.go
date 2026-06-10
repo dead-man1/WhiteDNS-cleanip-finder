@@ -3,6 +3,7 @@ package scanner
 import (
 	"fmt"
 	"net"
+	"strconv"
 	"strings"
 )
 
@@ -448,6 +449,15 @@ func isValidTarget(target string) bool {
 	// Try single IP
 	if ip := net.ParseIP(target); ip != nil {
 		return true
+	}
+
+	// Try ip:port format (e.g. 1.2.3.4:443)
+	if host, portStr, err := net.SplitHostPort(target); err == nil {
+		if net.ParseIP(host) != nil {
+			if p, err2 := strconv.Atoi(portStr); err2 == nil && p > 0 && p <= 65535 {
+				return true
+			}
+		}
 	}
 
 	// Try CIDR notation

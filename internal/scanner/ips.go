@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -304,10 +305,12 @@ const (
 func NewScanner(cfg *ScannerConfig) *Scanner {
 	if cfg == nil {
 		cfg = &ScannerConfig{
-			ProbeTimeout:        ProxyCheckTimeout,
-			ProbeRetries:        2,
-			MaxConcurrentProbes: 250,
-			ProbeIntervalMs:     100,
+			ProbeTimeout:                    ProxyCheckTimeout,
+			ProbeRetries:                    2,
+			MaxConcurrentProbes:             250,
+			ProbeIntervalMs:                 100,
+			ProbeRequireHTMLForDomainTokens: true,
+			ProbeAcceptOnCertMatch:          true,
 		}
 	}
 	s := &Scanner{
@@ -344,13 +347,7 @@ func NewScanner(cfg *ScannerConfig) *Scanner {
 	probeRequireHTMLForDomainTokens = true
 	probeAcceptOnCertMatch = true
 	if cfg != nil {
-		// Default to true for conservative robustness unless explicitly disabled.
-		if !cfg.ProbeRequireHTMLForDomainTokens {
-			cfg.ProbeRequireHTMLForDomainTokens = true
-		}
-		if !cfg.ProbeAcceptOnCertMatch {
-			cfg.ProbeAcceptOnCertMatch = true
-		}
+		// Respect persisted/runtime config values when a config object is provided.
 		probeRequireHTMLForDomainTokens = cfg.ProbeRequireHTMLForDomainTokens
 		probeAcceptOnCertMatch = cfg.ProbeAcceptOnCertMatch
 	}
@@ -433,7 +430,19 @@ func (s *Scanner) ScanIPsWithCIDR(cidrs []string, opts IPScanOptions) ([]string,
 	// Design cap: allow large CIDR expansion up to 65,536 IPs per block (matches Python's behavior)
 	maxIPsPerCIDR := 65536
 
+	// Fixed ip:port endpoints from user-pasted targets (bypass port expansion)
+	var fixedEndpoints []simpleEndpoint
+
 	for _, cidr := range cidrs {
+		// Handle ip:port format — use exactly the specified port, skip CIDR expansion
+		if host, portStr, err := net.SplitHostPort(cidr); err == nil {
+			if net.ParseIP(host) != nil {
+				if p, err2 := strconv.Atoi(portStr); err2 == nil && p > 0 && p <= 65535 {
+					fixedEndpoints = append(fixedEndpoints, simpleEndpoint{ip: host, port: p})
+					continue
+				}
+			}
+		}
 		ips, err := expandCIDR(cidr, maxIPsPerCIDR)
 		if err != nil {
 			s.logf("[DEBUG] expandCIDR error for %s: %v\n", cidr, err)
@@ -448,13 +457,14 @@ func (s *Scanner) ScanIPsWithCIDR(cidrs []string, opts IPScanOptions) ([]string,
 		}
 	}
 
-	if len(allIPs) == 0 {
+	if len(allIPs) == 0 && len(fixedEndpoints) == 0 {
 		s.logf("[ERROR] ScanIPsWithCIDR: no IPs expanded from CIDRs\n")
 		return nil, fmt.Errorf("no IPs expanded from CIDRs")
 	}
 
-	// Build endpoints and shuffle to avoid deterministic ordering
-	endpoints := make([]simpleEndpoint, 0, len(allIPs)*len(opts.Ports))
+	// Build endpoints: fixed ip:port pairs first, then CIDR-expanded IPs × all ports
+	endpoints := make([]simpleEndpoint, 0, len(fixedEndpoints)+len(allIPs)*len(opts.Ports))
+	endpoints = append(endpoints, fixedEndpoints...)
 	for _, ip := range allIPs {
 		for _, port := range opts.Ports {
 			endpoints = append(endpoints, simpleEndpoint{ip: ip, port: port})
@@ -501,7 +511,19 @@ func (s *Scanner) ScanIPsWithProgress(cidrs []string, opts IPScanOptions, progre
 	ipSet := make(map[string]bool)
 	maxIPsPerCIDR := 65536 // Match Python's cap to prevent loading excessive IPs per ASN
 
+	// Fixed ip:port endpoints from user-pasted targets (bypass port expansion)
+	var fixedEndpoints []simpleEndpoint
+
 	for _, cidr := range cidrs {
+		// Handle ip:port format — use exactly the specified port, skip CIDR expansion
+		if host, portStr, err := net.SplitHostPort(cidr); err == nil {
+			if net.ParseIP(host) != nil {
+				if p, err2 := strconv.Atoi(portStr); err2 == nil && p > 0 && p <= 65535 {
+					fixedEndpoints = append(fixedEndpoints, simpleEndpoint{ip: host, port: p})
+					continue
+				}
+			}
+		}
 		ips, err := expandCIDR(cidr, maxIPsPerCIDR)
 		if err != nil {
 			s.logf("[DEBUG] expandCIDR error for %s: %v\n", cidr, err)
@@ -516,15 +538,16 @@ func (s *Scanner) ScanIPsWithProgress(cidrs []string, opts IPScanOptions, progre
 		}
 	}
 
-	if len(allIPs) == 0 {
+	if len(allIPs) == 0 && len(fixedEndpoints) == 0 {
 		s.logf("[ERROR] ScanIPsWithProgress: no IPs expanded from CIDRs\n")
 		return nil, fmt.Errorf("no IPs expanded from CIDRs")
 	}
 
-	s.logf("[TRACE] ScanIPsWithProgress: total unique IPs after expansion: %d\n", len(allIPs))
+	s.logf("[TRACE] ScanIPsWithProgress: total unique IPs after expansion: %d, fixed endpoints: %d\n", len(allIPs), len(fixedEndpoints))
 
-	// Build endpoints and shuffle (pre-allocate for performance)
-	endpoints := make([]simpleEndpoint, 0, len(allIPs)*len(opts.Ports))
+	// Build endpoints: fixed ip:port pairs first, then CIDR-expanded IPs × all ports
+	endpoints := make([]simpleEndpoint, 0, len(fixedEndpoints)+len(allIPs)*len(opts.Ports))
+	endpoints = append(endpoints, fixedEndpoints...)
 	for _, ip := range allIPs {
 		for _, port := range opts.Ports {
 			endpoints = append(endpoints, simpleEndpoint{ip: ip, port: port})
@@ -915,9 +938,9 @@ func (s *Scanner) probeHTTP(ctx context.Context, ip string, port int, opts IPSca
 			if result.Status == "accept" {
 				return domainOutcome{result: result, accepted: true}
 			}
-			// soft_accept continues to next retry (if any) to see if it upgrades to accept
-			if result.Status == "soft_accept" && attempt < attempts-1 {
-				continue
+			// Python parity: soft_accept is finalized immediately (never retried).
+			if result.Status == "soft_accept" {
+				return domainOutcome{result: result}
 			}
 		}
 
@@ -1008,7 +1031,17 @@ func minimumDomainAcceptScore(domainCount int) int {
 	if domainCount <= 1 {
 		return 1
 	}
-	return 2
+	// For tiny domain sets, require at least 2 confirmations to avoid
+	// single-domain noise being accepted.
+	if domainCount <= 2 {
+		return 2
+	}
+	if domainCount <= 6 {
+		return 2
+	}
+	// Larger/default domain sets can legitimately pass only one domain on noisy
+	// networks; keep threshold at 1 to avoid suppressing true positives.
+	return 1
 }
 
 // looksLikeHTMLResponse performs a lightweight check for HTML-like bodies.
@@ -1177,9 +1210,10 @@ func (s *Scanner) probeHTTPS(ctx context.Context, ip string, port int, opts IPSc
 			if result.Status == "accept" {
 				return domainOutcome{result: result, accepted: true}
 			}
-			// soft_accept continues to next retry (if any) to see if it upgrades to accept
-			if result.Status == "soft_accept" && attempt < attempts-1 {
-				continue
+			// Python parity: soft_accept is finalized immediately (never retried).
+			// Python adds soft_accept domains to soft_domains without retry.
+			if result.Status == "soft_accept" {
+				return domainOutcome{result: result}
 			}
 		}
 
@@ -1220,12 +1254,15 @@ func (s *Scanner) probeHTTPS(ctx context.Context, ip string, port int, opts IPSc
 		close(outcomes)
 	}()
 
-	result := &IPScanResult{IP: ip, Port: port, DomainTotal: len(domains), DomainsTested: len(domains)}
+	result := &IPScanResult{IP: ip, Port: port, DomainTotal: len(domains), DomainsTested: len(domains), PassedDomains: []string{}}
 	domainScore := 0
 	var bestResult *IPScanResult
 	for outcome := range outcomes {
 		if outcome.accepted {
 			domainScore++
+			if outcome.result != nil {
+				result.PassedDomains = append(result.PassedDomains, outcome.result.Domain)
+			}
 			if outcome.result != nil && (bestResult == nil || bestResult.Status != "accept" || outcome.result.Status == "accept") {
 				copyResult := *outcome.result
 				bestResult = &copyResult
@@ -1243,13 +1280,14 @@ func (s *Scanner) probeHTTPS(ctx context.Context, ip string, port int, opts IPSc
 		bestResult.DomainScore = domainScore
 		bestResult.DomainTotal = len(domains)
 		bestResult.DomainsTested = len(domains)
-		s.logf("[SCORE] %s:%d domains %d/%d\n", ip, port, domainScore, len(domains))
+		bestResult.PassedDomains = result.PassedDomains
+		s.logf("[SCORE] %s:%d domains %d/%d passed:[%s]\n", ip, port, domainScore, len(domains), strings.Join(result.PassedDomains, ","))
 		return bestResult
 	}
 	if result.Status == "" {
 		result.Status = "reject"
 	}
-	s.logf("[SCORE] %s:%d domains %d/%d\n", ip, port, domainScore, len(domains))
+	s.logf("[SCORE] %s:%d domains %d/%d passed:[%s]\n", ip, port, domainScore, len(domains), strings.Join(result.PassedDomains, ","))
 
 	return result
 }
@@ -1297,38 +1335,30 @@ func classifyResponse(statusCode int, body []byte, headers http.Header, domain s
 	}
 
 	hasCDNSig := hasCDNHeaderSignature(headersLower)
-	// Extra heuristic: prefer real HTML evidence for domain matches to avoid
-	// accidental JSON/noise hits containing the domain string. This is a
-	// conservative increase in evidence required for an "accept" decision
-	// while preserving CDN and redirect-based fallbacks.
-	hasHTMLBody := looksLikeHTMLResponse(body)
-	// Python looks for CRLF+location header; mirror that exact check.
-	hasLocationMatch := strings.Contains(headersLower, "\r\nlocation:") && domainFound
+	// Python looks for location header presence; buildHeadersLower uses \n separators (not \r\n).
+	hasLocationMatch := strings.Contains(headersLower, "location:") && domainFound
 
 	switch {
 	case statusCode >= 500:
 		return "reject"
 	case statusCode == 400, statusCode == 403, statusCode == 409, statusCode == 421, statusCode == 451:
-		// For error-style status codes, prefer CDN evidence or an actual HTML
-		// body containing domain tokens rather than raw token matches in JSON
-		// or error pages.
-		if hasCDNSig {
-			return "accept"
-		}
-		if domainFound && (!probeRequireHTMLForDomainTokens || hasHTMLBody) {
+		// Python parity: for these 4xx codes accept only with domain evidence
+		// and no CDN signature.
+		if domainFound && !hasCDNSig {
 			return "accept"
 		}
 		return "reject"
 	case statusCode >= 200 && statusCode < 400:
-		// Require stronger evidence when relying on domain token matches to
-		// avoid accepting responses that merely echo the domain in structured
-		// payloads. CDN signatures or location redirects remain valid paths.
-		if hasCDNSig || hasLocationMatch || (domainFound && (!probeRequireHTMLForDomainTokens || hasHTMLBody)) {
+		if hasCDNSig || hasLocationMatch || domainFound {
 			return "accept"
 		}
 		return "reject"
 	case statusCode > 400 && statusCode < 500:
-		if hasCDNSig || (domainFound && (!probeRequireHTMLForDomainTokens || hasHTMLBody)) {
+		if domainFound {
+			return "accept"
+		}
+		if hasCDNSig {
+			// Python returns 'accept' (not 'soft_accept') for CDN sig + 4xx
 			return "accept"
 		}
 		return "reject"

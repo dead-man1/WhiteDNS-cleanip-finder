@@ -1280,12 +1280,15 @@ func (m tuiModel) viewScanning(w, h int) string {
 	empty := sDim.Render(strings.Repeat("░", barW-filled))
 	bar := left + empty + "  " + sAccent.Render(fmt.Sprintf("%3d%%", int(progress*100)))
 
-	stats := fmt.Sprintf("  Processed: %s/%s   Found: %s   IPs: %s",
+	stats := fmt.Sprintf("  Probes: %s/%s   Found: %s   Unique IPs: %s",
 		sInfo.Render(fmt.Sprintf("%d", m.scanProgress)),
 		sInfo.Render(fmt.Sprintf("%d", m.scanTotal)),
 		sSuccess.Render(fmt.Sprintf("%d", m.scanHits)),
 		sInfo.Render(fmt.Sprintf("%d", m.scanTotalIPs)),
 	)
+	if len(m.scanConfig.Ports) > 0 && m.scanTotalIPs > 0 {
+		stats += "   " + sDim.Render(fmt.Sprintf("ports %d", len(m.scanConfig.Ports)))
+	}
 	if !m.scanStartTime.IsZero() {
 		stats += "   " + sDim.Render(fmt.Sprintf("elapsed %s", time.Since(m.scanStartTime).Round(time.Second)))
 		if eta := scanETA(m.scanStartTime, m.scanProgress, m.scanTotal); eta != "" {
