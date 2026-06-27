@@ -110,19 +110,9 @@ func (s *Scanner) runThreeWavePipelineOptimized(ctx context.Context, endpoints [
 						continue
 					}
 
-					// Abort promptly if stopped (responsive cancellation).
-					if atomic.LoadInt32(&s.stopped) == 1 {
-						atomic.AddInt32(&processed, 1)
-						continue
-					}
-					// Check pause flag (break out if stopped while paused)
-					for atomic.LoadInt32(&s.paused) == 1 {
-						if atomic.LoadInt32(&s.stopped) == 1 {
-							break
-						}
-						time.Sleep(100 * time.Millisecond)
-					}
-					if atomic.LoadInt32(&s.stopped) == 1 {
+					// Abort promptly if stopped; otherwise block new probes
+					// while Pause is active.
+					if !s.waitWhilePaused() {
 						atomic.AddInt32(&processed, 1)
 						continue
 					}

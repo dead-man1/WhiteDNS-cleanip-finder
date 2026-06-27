@@ -785,20 +785,18 @@ func (s *Scanner) runThreeWavePipeline(ctx context.Context, endpoints []simpleEn
 				return
 			}
 
-			if atomic.LoadInt32(&s.stopped) == 1 {
+			if !s.waitWhilePaused() {
 				atomic.AddInt32(&processed, 1)
 				return
-			}
-			for atomic.LoadInt32(&s.paused) == 1 {
-				if atomic.LoadInt32(&s.stopped) == 1 {
-					atomic.AddInt32(&processed, 1)
-					return
-				}
-				time.Sleep(100 * time.Millisecond)
 			}
 
 			probeStarted := time.Now()
 			sem <- struct{}{}
+			if !s.waitWhilePaused() {
+				<-sem
+				atomic.AddInt32(&processed, 1)
+				return
+			}
 			result := s.probeIP(ctx, ip, port, probeOpts)
 			<-sem
 			probeLatency := time.Since(probeStarted)

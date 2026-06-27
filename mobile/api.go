@@ -586,13 +586,14 @@ func StartSNIScan(dataDir string, cfg *ScanConfig, l ScanListener) *ScanHandle {
 
 		resCh := make(chan tlsprobe.ProbeResult, 512)
 		go func() {
-			tlsprobe.RunScan(tlsprobe.ScanConfig{
+			tlsprobe.RunScanContext(h.ctx, tlsprobe.ScanConfig{
 				Targets:     targets,
 				Hostnames:   domains,
 				Port:        ports[0],
 				TimeoutSec:  timeout.Seconds(),
 				Concurrency: conc,
 				StrictSNI:   cfg.SNIStrict,
+				PauseFunc:   h.isPaused,
 			}, resCh, nil)
 		}()
 

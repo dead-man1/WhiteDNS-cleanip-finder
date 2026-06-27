@@ -277,8 +277,9 @@ func (s *Scanner) scanProxyCandidates(candidates []string, concurrency int, time
 		go func() {
 			defer wg.Done()
 			for endpoint := range jobs {
-				for atomic.LoadInt32(&s.paused) == 1 {
-					time.Sleep(100 * time.Millisecond)
+				if !s.waitWhilePaused() {
+					atomic.AddInt64(&completed, 1)
+					continue
 				}
 				start := time.Now()
 				if verifier.verify(endpoint, timeout) {
@@ -400,13 +401,19 @@ func (s *Scanner) scanProxyCandidatesWave3(candidates []string, maxTimeout time.
 		go func(ep string) {
 			defer wg.Done()
 			defer func() { <-taskSlots }()
-			for atomic.LoadInt32(&s.paused) == 1 {
-				time.Sleep(100 * time.Millisecond)
+			if !s.waitWhilePaused() {
+				atomic.AddInt64(&w1Done, 1)
+				return
 			}
 			start := time.Now()
 
 			// Wave 1
 			sem1 <- struct{}{}
+			if !s.waitWhilePaused() {
+				<-sem1
+				atomic.AddInt64(&w1Done, 1)
+				return
+			}
 			ok := httpWave1(ep, w1Timeout)
 			<-sem1
 			done := atomic.AddInt64(&w1Done, 1)
@@ -419,6 +426,10 @@ func (s *Scanner) scanProxyCandidatesWave3(candidates []string, maxTimeout time.
 
 			// Wave 2
 			sem2 <- struct{}{}
+			if !s.waitWhilePaused() {
+				<-sem2
+				return
+			}
 			ok = httpWave2(ep, w2Timeout)
 			<-sem2
 			atomic.AddInt64(&w2Done, 1)
@@ -431,6 +442,10 @@ func (s *Scanner) scanProxyCandidatesWave3(candidates []string, maxTimeout time.
 
 			// Wave 3 (strict acceptance)
 			sem3 <- struct{}{}
+			if !s.waitWhilePaused() {
+				<-sem3
+				return
+			}
 			ok = httpWave3(ep, w3Timeout)
 			<-sem3
 			atomic.AddInt64(&w3Done, 1)
@@ -498,8 +513,9 @@ func (s *Scanner) runProxyWaveOptimized(candidates []string, concurrency int, ti
 		go func() {
 			defer wg.Done()
 			for endpoint := range jobs {
-				for atomic.LoadInt32(&s.paused) == 1 {
-					time.Sleep(100 * time.Millisecond)
+				if !s.waitWhilePaused() {
+					atomic.AddInt64(&processedCount, 1)
+					continue
 				}
 				var passed bool
 				start := time.Now()
