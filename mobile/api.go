@@ -3,6 +3,7 @@ package mobile
 import (
 	"bufio"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"sort"
@@ -43,8 +44,8 @@ func (t *throttle) allow() bool {
 // scan end. This keeps memory flat regardless of how many results arrive.
 
 type resultFile struct {
-	f   *os.File
-	w   *bufio.Writer
+	f    *os.File
+	w    *bufio.Writer
 	path string
 }
 
@@ -161,12 +162,29 @@ func concurrencyOrDefault(c, def int) int {
 	return c
 }
 
-// Mobile memory guards — bound RAM so CDN-sized ranges (e.g. Cloudflare) can't
-// OOM-crash a phone. The scan runs on the capped subset (slow but stable).
+// Chunked-scan parameters. Instead of expanding every CIDR into RAM (which
+// OOM-crashes on CDN-sized ranges), the IP scan streams all IPs to a file on
+// disk, then scans them back a chunk at a time. This keeps RAM flat while
+// preserving FULL coverage — no CIDRs or IPs are dropped.
 const (
-	mobileMaxIPs       = 200000 // cap unique IPs expanded from CIDRs
-	mobileMaxEndpoints = 400000 // cap total ip:port endpoints (memory + goroutines)
+	chunkIPCount  = 4000  // IPs scanned per chunk (bounds per-chunk RAM)
+	perCIDRMaxIPs = 65536 // matches the desktop engine's per-CIDR expansion cap
 )
+
+// interChunkPause returns a short delay inserted between chunks so the scan does
+// not hold the radio saturated continuously — gentler on the user's connection.
+func interChunkPause(conc int) time.Duration {
+	switch {
+	case conc <= 10:
+		return 500 * time.Millisecond
+	case conc <= 25:
+		return 250 * time.Millisecond
+	case conc <= 50:
+		return 100 * time.Millisecond
+	default:
+		return 0
+	}
+}
 
 // gentleProbeDomains returns a reduced probe-domain list for low-concurrency
 // "gentle" modes (≤25 workers). Fewer probes per endpoint = far less bandwidth,
@@ -195,10 +213,11 @@ func calcETA(start time.Time, processed, total int) int {
 
 // ── IP / CIDR scan ───────────────────────────────────────────────────────────
 
-// StartIPScan scans IP ranges. Results are written to
-// {dataDir}/results/scan-ip-*.txt incrementally; only the last few are
-// forwarded to the listener (for live display). On millions of IPs this keeps
-// Android memory flat.
+// StartIPScan scans IP ranges with FULL coverage but flat memory. It streams
+// every expanded IP to a temp file on disk, then scans the file back in small
+// chunks — so a Cloudflare-sized range can be scanned without OOM-crashing the
+// device. Results are written to {dataDir}/results/scan-ip-*.txt incrementally
+// (so a stopped scan still keeps what it found).
 func StartIPScan(dataDir string, cfg *ScanConfig, l ScanListener) *ScanHandle {
 	if cfg == nil {
 		cfg = &ScanConfig{}
@@ -220,76 +239,182 @@ func StartIPScan(dataDir string, cfg *ScanConfig, l ScanListener) *ScanHandle {
 		}
 	})
 
-	opts := scanner.IPScanOptions{
-		Ports:         ports,
-		Concurrency:   conc,
-		Timeout:       timeout,
-		EndpointCount: len(targets) * len(ports),
-		// Android safety: never let the engine auto-raise to 2000 workers, and
-		// bound memory so CDN-sized ranges can't OOM the device.
-		DisableAutoConcurrency: true,
-		MaxIPs:                 mobileMaxIPs,
-		MaxEndpoints:           mobileMaxEndpoints,
-	}
-	// Gentle modes (≤25 workers): probe fewer domains per endpoint to keep the
-	// user's connection alive on weak links. Also pin per-endpoint parallelism low.
-	if gentle := gentleProbeDomains(conc); gentle != nil {
-		opts.ProbeDomainsHTTP = gentle
-		opts.ProbeDomainsHTTPS = gentle
-		opts.AdaptiveDomainConcurrency = 1
-	}
-	if cfg.LowBandwidth {
-		opts.AdaptiveDomainConcurrency = 1
-	}
-
-	start := time.Now()
-	progressCb := func(processed, totalProbes, accepted int, currentIP string, totalIPs int) {
-		if !h.isStopped() {
-			l.OnProgress(processed, totalProbes, accepted, totalIPs, currentIP,
-				calcETA(start, processed, totalProbes))
+	// Per-chunk options. DisableAutoConcurrency keeps worker count phone-safe;
+	// gentle modes probe fewer domains per IP. No MaxIPs/MaxEndpoints caps —
+	// coverage is full; chunking (not capping) is what bounds memory.
+	makeOpts := func() scanner.IPScanOptions {
+		o := scanner.IPScanOptions{
+			Ports:                  ports,
+			Concurrency:            conc,
+			Timeout:                timeout,
+			DisableAutoConcurrency: true,
 		}
+		if gentle := gentleProbeDomains(conc); gentle != nil {
+			o.ProbeDomainsHTTP = gentle
+			o.ProbeDomainsHTTPS = gentle
+			o.AdaptiveDomainConcurrency = 1
+		}
+		if cfg.LowBandwidth {
+			o.AdaptiveDomainConcurrency = 1
+		}
+		return o
 	}
 
 	go func() {
 		defer sc.SetLogCallback(nil)
 
-		rf, _ := openResultFile(dataDir, "ip")
-		resultThrottle := newThrottle(250 * time.Millisecond)
-
-		// Wrap progressCb to also capture accepted endpoints as they stream.
-		// The engine reports the currentIP on every progress tick; we hook into
-		// the accepted count to detect new hits. However the engine doesn't give
-		// us accepted endpoints mid-scan — we receive the full list at the end.
-		// So: write all to file at end, send throttled sample to listener.
-		results, err := sc.ScanIPsWithProgress(targets, opts, progressCb)
-		sc.SetLogCallback(nil)
-
-		if err != nil || h.isStopped() {
-			savedPath := rf.close()
-			msg := ""
-			if err != nil {
-				msg = err.Error()
-			} else {
-				msg = "stopped"
-			}
-			if savedPath != "" && err == nil {
-				// partial results already written? no — engine returns nothing on stop.
-			}
-			l.OnDone("", msg)
+		// 1. Stream-expand all CIDRs/IPs to a temp file (low RAM, full coverage).
+		tmpPath := filepath.Join(dataDir, "tmp", fmt.Sprintf("targets-%d.txt", time.Now().UnixNano()))
+		totalIPs, err := expandTargetsToFile(targets, tmpPath)
+		if err != nil {
+			l.OnDone("", "could not stage targets: "+err.Error())
+			return
+		}
+		defer os.Remove(tmpPath)
+		if totalIPs == 0 {
+			l.OnDone("", "no IPs expanded from CIDRs")
 			return
 		}
 
-		// Write all results to disk, forward throttled sample to Kotlin for display.
-		for _, r := range results {
-			rf.write(r)
-			if resultThrottle.allow() {
-				l.OnResult(r)
+		file, err := os.Open(tmpPath)
+		if err != nil {
+			l.OnDone("", err.Error())
+			return
+		}
+		defer file.Close()
+
+		rf, _ := openResultFile(dataDir, "ip")
+		resultThrottle := newThrottle(250 * time.Millisecond)
+		totalEndpoints := totalIPs * len(ports)
+		start := time.Now()
+		processedBase := 0 // endpoints fully scanned in prior chunks
+		foundTotal := 0
+		pause := interChunkPause(conc)
+
+		// 2. Scan one chunk of IPs, writing accepted results to disk as we go.
+		runChunk := func(chunk []string) {
+			if len(chunk) == 0 {
+				return
+			}
+			progressCb := func(processed, _ /*totalProbes*/, accepted int, currentIP string, _ int) {
+				if !h.isStopped() {
+					done := processedBase + processed
+					l.OnProgress(done, totalEndpoints, foundTotal+accepted, totalIPs,
+						currentIP, calcETA(start, done, totalEndpoints))
+				}
+			}
+			results, scanErr := sc.ScanIPsWithProgress(chunk, makeOpts(), progressCb)
+			if scanErr == nil {
+				for _, r := range results {
+					rf.write(r)
+					if resultThrottle.allow() {
+						l.OnResult(r)
+					}
+				}
+				foundTotal += len(results)
+			}
+			processedBase += len(chunk) * len(ports)
+		}
+
+		// 3. Read the staged IP file chunk by chunk.
+		fileScanner := bufio.NewScanner(file)
+		fileScanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+		chunk := make([]string, 0, chunkIPCount)
+		for fileScanner.Scan() {
+			if h.isStopped() {
+				break
+			}
+			for h.isPaused() && !h.isStopped() {
+				time.Sleep(200 * time.Millisecond)
+			}
+			line := strings.TrimSpace(fileScanner.Text())
+			if line == "" {
+				continue
+			}
+			chunk = append(chunk, line)
+			if len(chunk) >= chunkIPCount {
+				runChunk(chunk)
+				chunk = chunk[:0]
+				if pause > 0 && !h.isStopped() {
+					time.Sleep(pause) // ease bandwidth between chunks
+				}
 			}
 		}
+		if !h.isStopped() {
+			runChunk(chunk) // final partial chunk
+		}
+
 		savedPath := rf.close()
+		if h.isStopped() {
+			l.OnDone(savedPath, "stopped")
+			return
+		}
 		l.OnDone(savedPath, "")
 	}()
 	return h
+}
+
+// expandTargetsToFile streams every IP from the given CIDRs/IPs to path, one per
+// line, without holding the full set in RAM. ip:port targets and bare IPs pass
+// through unchanged. Each CIDR is capped at perCIDRMaxIPs (matching the desktop
+// engine) so a single huge prefix can't fill the disk. Returns the line count.
+func expandTargetsToFile(targets []string, path string) (int, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return 0, err
+	}
+	f, err := os.Create(path)
+	if err != nil {
+		return 0, err
+	}
+	w := bufio.NewWriterSize(f, 64*1024)
+	count := 0
+	for _, t := range targets {
+		t = strings.TrimSpace(t)
+		if t == "" {
+			continue
+		}
+		// ip:port passthrough
+		if host, _, err := net.SplitHostPort(t); err == nil && net.ParseIP(host) != nil {
+			fmt.Fprintln(w, t)
+			count++
+			continue
+		}
+		// bare IP
+		if net.ParseIP(t) != nil {
+			fmt.Fprintln(w, t)
+			count++
+			continue
+		}
+		// CIDR — stream each address
+		_, ipnet, perr := net.ParseCIDR(t)
+		if perr != nil {
+			continue
+		}
+		cur := make(net.IP, len(ipnet.IP))
+		copy(cur, ipnet.IP.Mask(ipnet.Mask))
+		emitted := 0
+		for ipnet.Contains(cur) && emitted < perCIDRMaxIPs {
+			fmt.Fprintln(w, cur.String())
+			count++
+			emitted++
+			incIP(cur)
+		}
+	}
+	if err := w.Flush(); err != nil {
+		f.Close()
+		return count, err
+	}
+	return count, f.Close()
+}
+
+// incIP increments an IP address (big-endian) by one, in place.
+func incIP(ip net.IP) {
+	for j := len(ip) - 1; j >= 0; j-- {
+		ip[j]++
+		if ip[j] > 0 {
+			break
+		}
+	}
 }
 
 // ── HTTP / SOCKS5 proxy scans ────────────────────────────────────────────────
