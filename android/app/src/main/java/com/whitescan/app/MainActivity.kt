@@ -70,7 +70,7 @@ class MainActivity : ComponentActivity() {
                 }
 
                 val screenTitle = when (screen) {
-                    Screen.Home -> "WhiteDNS"
+                    Screen.Home -> ""   // banner inside HomeScreen shows branding
                     is Screen.Config -> "${(screen as Screen.Config).kind.label()} · Config"
                     Screen.AsnPicker -> "Select ASNs"
                     Screen.ConfigMaker -> "Config Maker"

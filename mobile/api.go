@@ -732,7 +732,10 @@ func ExportCIDRs(dataDir, cidrs string) (string, error) {
 	return path, err
 }
 
-// ASNSearch returns matching ASNs as newline-separated "ASN\tName\tsubnetCount" rows.
+// ASNSearch returns matching ASNs as newline-separated "ASN\tName\tipv4Count"
+// rows. ASNs with no IPv4 CIDRs are omitted (the scanner is IPv4-only), and the
+// count reported is the IPv4 subnet count — so the picker never offers an ASN
+// that would fail to expand.
 func ASNSearch(dataDir, query string) (string, error) {
 	eng := asn.NewASNEngine(dataDir)
 	if err := eng.Load(); err != nil {
@@ -744,7 +747,16 @@ func ASNSearch(dataDir, query string) (string, error) {
 	}
 	var b strings.Builder
 	for _, g := range groups {
-		fmt.Fprintf(&b, "%s\t%s\t%d\n", g.ASN, g.Name, g.SubnetCount)
+		v4 := 0
+		for _, c := range g.CIDRs {
+			if !strings.Contains(c, ":") {
+				v4++
+			}
+		}
+		if v4 == 0 {
+			continue // IPv6-only ASN — not scannable here, hide it
+		}
+		fmt.Fprintf(&b, "%s\t%s\t%d\n", g.ASN, g.Name, v4)
 	}
 	return b.String(), nil
 }
