@@ -1,6 +1,8 @@
 ﻿.venv/
 .whitedns/
 builds/
+.tools/
+.gradle-user-home/
 __pycache__/
 .gocache/
 *.pyc
