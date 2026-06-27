@@ -120,7 +120,7 @@ fun ResultsScreen(
                             line,
                             fontSize = 12.sp,
                             fontFamily = FontFamily.Monospace,
-                            color = Color(0xFF4CAF50),
+                            color = MintGreen,
                             modifier = Modifier.padding(vertical = 3.dp),
                         )
                         HorizontalDivider(

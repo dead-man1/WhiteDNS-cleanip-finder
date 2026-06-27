@@ -73,10 +73,13 @@ fun ScanningScreen(
                             .fillMaxHeight()
                             .background(
                                 Brush.horizontalGradient(
+                                    // TUI gradient stops: #00d1ff → #7fff00 → #ffb400 → #ff4081 → #8a2be2
                                     listOf(
-                                        Color(0xFF00BCD4),  // cyan
-                                        Color(0xFF4CAF50),  // green
-                                        Color(0xFFFF9800),  // orange
+                                        Color(0xFF00D1FF),
+                                        Color(0xFF7FFF00),
+                                        Color(0xFFFFB400),
+                                        Color(0xFFFF4081),
+                                        Color(0xFF8A2BE2),
                                     )
                                 ),
                                 MaterialTheme.shapes.small,
@@ -118,7 +121,7 @@ fun ScanningScreen(
                     "✓ $line",
                     fontSize = 11.sp,
                     fontFamily = FontFamily.Monospace,
-                    color = Color(0xFF4CAF50),
+                    color = MintGreen,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )

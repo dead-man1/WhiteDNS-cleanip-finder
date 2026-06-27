@@ -43,7 +43,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
 
         setContent {
-            MaterialTheme {
+            WhiteDNSTheme {
                 var screen by remember { mutableStateOf<Screen>(Screen.Home) }
                 var pendingKind by remember { mutableStateOf(ScanKind.IP) }
                 var form by remember { mutableStateOf(FormState()) }
