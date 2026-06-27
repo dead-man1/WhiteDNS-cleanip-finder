@@ -92,30 +92,33 @@ fun ResultsScreen(
 
         HorizontalDivider()
 
-        // Preview: last 100 lines loaded from disk (no RAM accumulation).
+        // Show the file preview once loaded; until then (or if the file read is
+        // empty) fall back to the live results captured during the scan so a
+        // stopped scan still shows what it found immediately.
+        val display = if (state.preview.isNotEmpty()) state.preview else state.liveResults
         when {
-            state.previewLoading -> {
+            state.previewLoading && display.isEmpty() -> {
                 Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator(modifier = Modifier.padding(24.dp))
                 }
             }
-            state.preview.isEmpty() && state.savedPath != null -> {
+            display.isEmpty() -> {
                 Text(
-                    "No results saved.",
+                    if (state.found > 0) "Loading ${state.found} result(s)…" else "No results found.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
             else -> {
-                if (state.found > state.preview.size) {
+                if (state.found > display.size) {
                     Text(
-                        "Showing last ${state.preview.size} of ${state.found} — full list in file",
+                        "Showing ${display.size} of ${state.found} — full list in file",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
                 LazyColumn(modifier = Modifier.weight(1f).fillMaxWidth()) {
-                    items(state.preview) { line ->
+                    items(display) { line ->
                         Text(
                             line,
                             fontSize = 12.sp,

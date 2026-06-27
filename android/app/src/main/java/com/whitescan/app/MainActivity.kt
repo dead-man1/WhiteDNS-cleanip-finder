@@ -1,10 +1,17 @@
 package com.whitescan.app
 
+import android.Manifest
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Environment
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
@@ -12,6 +19,7 @@ import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.whitescan.app.ui.*
 import com.whitescan.engine.mobile.Mobile
@@ -31,18 +39,56 @@ class MainActivity : ComponentActivity() {
 
     private val vm: ScanViewModel by viewModels()
 
-    // All output goes here: /sdcard/Android/data/com.whitescan.app/files/WhiteDNS Scanner/
-    // No storage permission needed — this is the app's scoped external files dir.
-    private val scanDir: File by lazy {
-        (getExternalFilesDir(null) ?: filesDir)
-            .resolve("WhiteDNS Scanner")
-            .also { it.mkdirs() }
+    // Launcher for the legacy (API <= 29) WRITE_EXTERNAL_STORAGE runtime prompt.
+    private val legacyStoragePerm =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { /* result handled lazily */ }
+
+    // True when we can write to the public storage root.
+    private fun hasAllFilesAccess(): Boolean =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R)
+            Environment.isExternalStorageManager()
+        else
+            ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) ==
+                PackageManager.PERMISSION_GRANTED
+
+    // Ask for storage access so outputs land in a user-visible folder. On API 30+
+    // this is "All files access" (Settings screen); on older it's a normal prompt.
+    private fun requestStorageAccess() {
+        if (hasAllFilesAccess()) return
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            try {
+                startActivity(
+                    Intent(
+                        Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                        Uri.parse("package:$packageName"),
+                    )
+                )
+            } catch (_: Exception) {
+                try { startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)) }
+                catch (_: Exception) {}
+            }
+        } else {
+            legacyStoragePerm.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+        }
+    }
+
+    // Where all results/logs/exports go. If storage permission is granted, use a
+    // user-visible "WhiteDNS Scanner" folder at the root of shared storage;
+    // otherwise fall back to the app-specific dir (always writable, just hidden).
+    private fun currentScanDir(): File {
+        val base = if (hasAllFilesAccess())
+            File(Environment.getExternalStorageDirectory(), "WhiteDNS Scanner")
+        else
+            (getExternalFilesDir(null) ?: filesDir).resolve("WhiteDNS Scanner")
+        base.mkdirs()
+        return base
     }
 
     @OptIn(ExperimentalMaterial3Api::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        requestStorageAccess()
 
         setContent {
             WhiteDNSTheme {
@@ -121,7 +167,7 @@ class MainActivity : ComponentActivity() {
                                 onConfigMaker = { screen = Screen.ConfigMaker },
                             )
 
-                            Screen.ConfigMaker -> ConfigMakerScreen(dataDir = scanDir.absolutePath)
+                            Screen.ConfigMaker -> ConfigMakerScreen(dataDir = currentScanDir().absolutePath)
 
                             is Screen.Config -> ScanConfigForm(
                                 kind = s.kind,
@@ -134,19 +180,19 @@ class MainActivity : ComponentActivity() {
                                 onStart = {
                                     screen = Screen.Scanning(s.kind)
                                     startForegroundScanService(s.kind)
-                                    vm.start(s.kind, scanDir.absolutePath, form.toEngineConfig())
+                                    vm.start(s.kind, currentScanDir().absolutePath, form.toEngineConfig())
                                 },
                             )
 
                             Screen.AsnPicker -> AsnSearchScreen(
-                                dataDir = scanDir.absolutePath,
+                                dataDir = currentScanDir().absolutePath,
                                 confirmLabel = if (pendingKind == ScanKind.ASN_EXPORT) "Export IPs" else "Use selection",
                                 onSelected = { targets ->
                                     form = form.copy(targets = targets)
                                     if (pendingKind == ScanKind.ASN_EXPORT) {
                                         vm.reset()
                                         startForegroundScanService(ScanKind.ASN_EXPORT)
-                                        vm.start(ScanKind.ASN_EXPORT, scanDir.absolutePath,
+                                        vm.start(ScanKind.ASN_EXPORT, currentScanDir().absolutePath,
                                             form.copy(targets = targets).toEngineConfig())
                                         screen = Screen.Scanning(ScanKind.ASN_EXPORT)
                                     } else {
