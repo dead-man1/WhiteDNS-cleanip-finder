@@ -14,6 +14,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.whitescan.app.ui.*
+import com.whitescan.engine.mobile.Mobile
 import com.whitescan.engine.mobile.ScanConfig
 import java.io.File
 
@@ -202,10 +203,12 @@ private fun ScanKind.label() = when (this) {
 
 // Maps FormState → gomobile ScanConfig (setter names from gomobile Java codegen).
 private fun FormState.toEngineConfig(): ScanConfig {
-    val cfg = ScanConfig()
+    // newScanConfig() is the gomobile factory (struct construction from Kotlin
+    // is unreliable). Concurrency/TimeoutMs are Go int -> Java long -> Kotlin Long.
+    val cfg = Mobile.newScanConfig()
     cfg.targets       = targets.trim()
     cfg.ports         = ports.trim()
-    cfg.concurrency   = concurrency.toIntOrNull() ?: 100
+    cfg.concurrency   = (concurrency.toIntOrNull() ?: 100).toLong()
     cfg.lowBandwidth  = lowBandwidth
     cfg.transferModel = transferModel
     cfg.setSNIDomains(sniDomains.trim())

@@ -150,28 +150,19 @@ fun ScanConfigForm(
         item {
             SectionLabel("Workers")
             Spacer(Modifier.height(4.dp))
-            // Scrollable row of chips — matches TUI's 7 concurrency options
-            @Composable
-            fun PresetChip(preset: ConcurrencyPreset) {
-                val isSelected = !showCustomConcurrency &&
-                    form.concurrency == preset.value && form.lowBandwidth == preset.lowBw
-                FilterChip(
-                    selected = isSelected,
-                    onClick = {
-                        showCustomConcurrency = false
-                        onFormChange(form.copy(concurrency = preset.value, lowBandwidth = preset.lowBw))
-                    },
-                    label = { Text(preset.label) },
-                    modifier = Modifier.height(36.dp),
-                )
-            }
-            // Two rows to fit phone width
+            // Two rows of chips — matches TUI's 7 concurrency options
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                CONCURRENCY_PRESETS.take(4).forEach { PresetChip(it) }
+                CONCURRENCY_PRESETS.take(4).forEach { preset ->
+                    ConcurrencyChip(preset, form, showCustomConcurrency,
+                        onPick = { showCustomConcurrency = false; onFormChange(it) })
+                }
             }
             Spacer(Modifier.height(4.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                CONCURRENCY_PRESETS.drop(4).forEach { PresetChip(it) }
+                CONCURRENCY_PRESETS.drop(4).forEach { preset ->
+                    ConcurrencyChip(preset, form, showCustomConcurrency,
+                        onPick = { showCustomConcurrency = false; onFormChange(it) })
+                }
                 FilterChip(
                     selected = showCustomConcurrency,
                     onClick = { showCustomConcurrency = !showCustomConcurrency },
@@ -289,6 +280,24 @@ fun ScanConfigForm(
             }
         }
     }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ConcurrencyChip(
+    preset: ConcurrencyPreset,
+    form: FormState,
+    customActive: Boolean,
+    onPick: (FormState) -> Unit,
+) {
+    val isSelected = !customActive &&
+        form.concurrency == preset.value && form.lowBandwidth == preset.lowBw
+    FilterChip(
+        selected = isSelected,
+        onClick = { onPick(form.copy(concurrency = preset.value, lowBandwidth = preset.lowBw)) },
+        label = { Text(preset.label) },
+        modifier = Modifier.height(36.dp),
+    )
 }
 
 @Composable
