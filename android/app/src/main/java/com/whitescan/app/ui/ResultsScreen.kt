@@ -1,7 +1,12 @@
 package com.whitescan.app.ui
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.widget.Toast
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -12,9 +17,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
@@ -22,6 +29,7 @@ import com.whitescan.app.ScanUiState
 import com.whitescan.app.ScanViewModel
 import java.io.File
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun ResultsScreen(
     state: ScanUiState,
@@ -30,6 +38,7 @@ fun ResultsScreen(
     onNewScan: () -> Unit,
 ) {
     val ctx = LocalContext.current
+    val haptic = LocalHapticFeedback.current
 
     // Load the last 100 lines from disk once when savedPath is known.
     LaunchedEffect(state.savedPath) {
@@ -110,21 +119,22 @@ fun ResultsScreen(
                 )
             }
             else -> {
-                if (state.found > display.size) {
-                    Text(
-                        "Showing ${display.size} of ${state.found} — full list in file",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
+                Text(
+                    if (state.found > display.size)
+                        "Showing ${display.size} of ${state.found} · long-press an IP to copy"
+                    else
+                        "Long-press an IP to copy it",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
                 LazyColumn(modifier = Modifier.weight(1f).fillMaxWidth()) {
                     items(display) { line ->
-                        Text(
-                            line,
-                            fontSize = 12.sp,
-                            fontFamily = FontFamily.Monospace,
-                            color = MintGreen,
-                            modifier = Modifier.padding(vertical = 3.dp),
+                        ResultRow(
+                            line = line,
+                            onCopy = { ip ->
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                copyToClipboard(ctx, ip)
+                            },
                         )
                         HorizontalDivider(
                             thickness = 0.5.dp,
@@ -149,6 +159,62 @@ fun ResultsScreen(
             ) { Text("New Scan") }
         }
     }
+}
+
+// A result line is "IP:port" optionally followed by a TAB and the passed probe
+// domains. Long-press copies ONLY the IP:port; the domains are shown as tags but
+// never included in the copied text.
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun ResultRow(line: String, onCopy: (String) -> Unit) {
+    val tab = line.indexOf('\t')
+    val ip = (if (tab >= 0) line.substring(0, tab) else line).trim()
+    val domains = if (tab >= 0) line.substring(tab + 1).trim() else ""
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .combinedClickable(
+                onClick = {},
+                onLongClick = { onCopy(ip) },
+            )
+            .padding(vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(
+            ip,
+            fontSize = 13.sp,
+            fontFamily = FontFamily.Monospace,
+            fontWeight = FontWeight.SemiBold,
+            color = MintGreen,
+        )
+        if (domains.isNotEmpty()) {
+            // Each passed domain as a small tag (display only, not copyable).
+            domains.split(',').forEach { d ->
+                val name = d.trim()
+                if (name.isNotEmpty()) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.secondaryContainer,
+                        shape = MaterialTheme.shapes.small,
+                    ) {
+                        Text(
+                            name,
+                            fontSize = 10.sp,
+                            color = MaterialTheme.colorScheme.onSecondaryContainer,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun copyToClipboard(ctx: Context, text: String) {
+    val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return
+    cm.setPrimaryClip(ClipData.newPlainText("ip", text))
+    Toast.makeText(ctx, "Copied $text", Toast.LENGTH_SHORT).show()
 }
 
 private fun shareFile(ctx: Context, path: String) {

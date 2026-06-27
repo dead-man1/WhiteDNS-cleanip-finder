@@ -12,6 +12,8 @@ __pycache__/
 *.dll
 *.so
 *.dylib
+*.syso
+cmd/whitedns/winres/whitedns-icon-256.png
 
 # Archives and packaged builds
 *.zip

@@ -149,6 +149,7 @@ chmod +x ./whitedns-linux-amd64
 
 - Go نسخه 1.25 یا بالاتر
 - PowerShell در ویندوز یا bash در لینوکس/مک
+- برای قرار دادن آیکن در فایل دسکتاپ ویندوز: `go install github.com/tc-hib/go-winres@latest`
 - برای اندروید: JDK 17، Android SDK API 34، NDK r26، Gradle 8.7 و gomobile
 
 ### ساخت دسکتاپ
@@ -158,6 +159,10 @@ chmod +x ./whitedns-linux-amd64
 ```powershell
 .\build_cross_platform.ps1 -CleanBuild
 ```
+
+در خروجی ویندوز، همان آیکن WhiteDNS نسخه اندروید داخل فایل `.exe` قرار
+می‌گیرد. اگر `go-winres` نصب باشد، اسکریپت build فایل resource ویندوز را
+خودکار می‌سازد.
 
 اجرای تست‌ها:
 

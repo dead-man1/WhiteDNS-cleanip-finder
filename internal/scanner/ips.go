@@ -830,7 +830,13 @@ func (s *Scanner) runThreeWavePipeline(ctx context.Context, endpoints []simpleEn
 						s.logf("[+] %s\n", strings.Join(parts, " "))
 					}
 				}
-				results <- fmt.Sprintf("%s:%d", ip, port)
+				resultLine := fmt.Sprintf("%s:%d", ip, port)
+				if passedDomainsStr != "" {
+					// Append passed domains after a TAB so the IP:port stays the
+					// first whitespace token (TUI + config-maker parse it).
+					resultLine += "\t" + passedDomainsStr
+				}
+				results <- resultLine
 			} else if result != nil && result.Status == "dead" {
 				atomic.AddInt32(&deadCount, 1)
 			} else if result != nil && result.Status == "reject" {

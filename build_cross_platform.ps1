@@ -28,6 +28,79 @@ if (-not (Test-Path $BuildDir)) {
 
 $SuccessCount = 0
 $FailCount = 0
+$DesktopIconPath = Join-Path $ScriptDir "android\app\src\main\res\drawable-nodpi\whitedns_logo.png"
+$WindowsResConfig = Join-Path $ScriptDir "cmd\whitedns\winres\winres.json"
+$WindowsIconPath = Join-Path $ScriptDir "cmd\whitedns\winres\whitedns-icon-256.png"
+$WindowsResPrefix = Join-Path $ScriptDir "cmd\whitedns\rsrc"
+
+function Get-GoWinresPath {
+    $cmd = Get-Command go-winres -ErrorAction SilentlyContinue
+    if ($cmd) {
+        return $cmd.Source
+    }
+
+    $gopath = (& go env GOPATH).Trim()
+    if ($gopath) {
+        $candidate = Join-Path $gopath "bin\go-winres.exe"
+        if (Test-Path $candidate) {
+            return $candidate
+        }
+    }
+
+    return $null
+}
+
+function Update-WindowsIconResource {
+    if (-not (Test-Path $DesktopIconPath)) {
+        throw "desktop icon PNG not found: $DesktopIconPath"
+    }
+    if (-not (Test-Path $WindowsResConfig)) {
+        throw "Windows resource config not found: $WindowsResConfig"
+    }
+
+    $goWinres = Get-GoWinresPath
+    if (-not $goWinres) {
+        throw "go-winres is required to embed the Windows icon. Install it with: go install github.com/tc-hib/go-winres@latest"
+    }
+
+    Add-Type -AssemblyName System.Drawing
+    $source = [System.Drawing.Image]::FromFile($DesktopIconPath)
+    try {
+        $bitmap = New-Object System.Drawing.Bitmap 256, 256
+        try {
+            $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+            try {
+                $graphics.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+                $graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::HighQuality
+                $graphics.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+                $graphics.Clear([System.Drawing.Color]::Transparent)
+                $graphics.DrawImage($source, 0, 0, 256, 256)
+                $bitmap.Save($WindowsIconPath, [System.Drawing.Imaging.ImageFormat]::Png)
+            }
+            finally {
+                $graphics.Dispose()
+            }
+        }
+        finally {
+            $bitmap.Dispose()
+        }
+    }
+    finally {
+        $source.Dispose()
+    }
+
+    Write-Host "  [*] Updating Windows icon resources..." -ForegroundColor Gray
+    & $goWinres make --in $WindowsResConfig --arch amd64 --out $WindowsResPrefix
+    if ($LASTEXITCODE -ne 0) {
+        throw "go-winres failed with exit code $LASTEXITCODE"
+    }
+}
+
+function Copy-DesktopIconAsset {
+    if (Test-Path $DesktopIconPath) {
+        Copy-Item -LiteralPath $DesktopIconPath -Destination (Join-Path $BuildDir "whitedns-icon.png") -Force
+    }
+}
 
 # Function to build for a specific platform
 function Invoke-CrossPlatformBuild {
@@ -54,6 +127,10 @@ function Invoke-CrossPlatformBuild {
     $StartTime = Get-Date
     
     try {
+        if ($OS -eq "windows") {
+            Update-WindowsIconResource
+        }
+
         $BuildArgs = @(
             "build",
             "-trimpath",
@@ -158,6 +235,8 @@ foreach ($Build in $Builds) {
 
     Write-Host "`n[*] Bundled data notice:" -ForegroundColor Yellow
     Write-Host "  [OK] ASN CSV and assets/cf-domains.txt are embedded into each binary" -ForegroundColor Green
+    Copy-DesktopIconAsset
+    Write-Host "  [OK] Desktop icon asset copied to builds/whitedns-icon.png" -ForegroundColor Green
 
 # Summary
 Write-Host @"

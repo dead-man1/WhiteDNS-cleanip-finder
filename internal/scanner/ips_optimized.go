@@ -149,7 +149,13 @@ func (s *Scanner) runThreeWavePipelineOptimized(ctx context.Context, endpoints [
 								s.logf("[+] %s\n", strings.Join(parts, " "))
 							}
 						}
-						resultsChan <- fmt.Sprintf("%s:%d", job.ip, job.port)
+						resultLine := fmt.Sprintf("%s:%d", job.ip, job.port)
+						if passedDomainsStr != "" {
+							// Append passed domains after a TAB so the IP:port stays
+							// the first whitespace token (TUI + config-maker parse it).
+							resultLine += "\t" + passedDomainsStr
+						}
+						resultsChan <- resultLine
 					} else if result != nil && result.Status == "dead" {
 						atomic.AddInt32(&deadCount, 1)
 					} else if result != nil && result.Status == "reject" {

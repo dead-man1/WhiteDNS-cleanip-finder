@@ -147,6 +147,7 @@ Fallback/app-specific location:
 
 - Go 1.25+
 - PowerShell on Windows, or bash on Linux/macOS
+- For Windows desktop icon embedding: `go install github.com/tc-hib/go-winres@latest`
 - For Android: JDK 17, Android SDK API 34, NDK r26, Gradle 8.7, gomobile
 
 ### Desktop Build
@@ -156,6 +157,10 @@ Build all desktop targets:
 ```powershell
 .\build_cross_platform.ps1 -CleanBuild
 ```
+
+The Windows `.exe` build embeds the same WhiteDNS icon used by Android. The
+script generates the Windows resource file automatically when `go-winres` is
+available.
 
 Run tests:
 
