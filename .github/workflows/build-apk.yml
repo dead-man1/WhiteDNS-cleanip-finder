@@ -1,4 +1,4 @@
-﻿name: Build Android APK
+name: Build Android APK
 
 on:
   workflow_dispatch:
@@ -31,6 +31,14 @@ jobs:
 
       - name: Apply app icon assets
         run: python scripts/apply_app_icon.py
+
+      - name: Verify generated app icon assets
+        run: |
+          test -s android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
+          test -s android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_round.png
+          test -s android/app/src/main/res/drawable-nodpi/whitedns_logo.png
+          grep -q 'android:icon="@mipmap/ic_launcher"' android/app/src/main/AndroidManifest.xml
+          grep -q 'android:roundIcon="@mipmap/ic_launcher_round"' android/app/src/main/AndroidManifest.xml
 
       # â”€â”€ 2. Go 1.25 â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
       - uses: actions/setup-go@v5

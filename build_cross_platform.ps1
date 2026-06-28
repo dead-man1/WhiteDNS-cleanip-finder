@@ -1,4 +1,4 @@
-﻿# Cross-platform build script for whitedns
+# Cross-platform build script for whitedns
 # Builds for: Windows (current), Linux AMD64, Linux ARM64, macOS AMD64, macOS ARM64, Termux (Android ARM64)
 
 param(
@@ -79,8 +79,12 @@ function Get-GoWinresPath {
 }
 
 function Update-WindowsIconResource {
-    if (-not (Test-Path $DesktopIconPath)) {
-        throw "desktop icon PNG not found: $DesktopIconPath"
+    $SourceIconPath = $DesktopIconPath
+    if (Test-Path $ApprovedIconPath) {
+        $SourceIconPath = $ApprovedIconPath
+    }
+    if (-not (Test-Path $SourceIconPath)) {
+        throw "Windows icon source PNG not found: $SourceIconPath"
     }
     if (-not (Test-Path $WindowsResConfig)) {
         throw "Windows resource config not found: $WindowsResConfig"
@@ -164,6 +168,7 @@ function Invoke-CrossPlatformBuild {
 
         $BuildArgs = @(
             "build",
+            "-a",
             "-trimpath",
             "-ldflags=-s -w",
             "-o", $OutputPath,
