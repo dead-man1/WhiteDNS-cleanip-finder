@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -24,6 +25,27 @@ import (
 func healthGateDisabled() bool {
 	v := strings.TrimSpace(os.Getenv("WHITE_DISABLE_HEALTH_GATE"))
 	return v == "1" || strings.EqualFold(v, "true") || strings.EqualFold(v, "yes")
+}
+
+// quickConnectivityCheck reports whether the device currently has working
+// network, using a couple of fast TCP dials to well-known anycast hosts. Unlike
+// the Iranian-site health probe, a single TCP SYN succeeds even while a heavy
+// scan is in flight and regardless of whether the user can reach Iranian sites —
+// so it tells genuine "device offline" apart from "can't reach Iran health
+// sites" (self-congestion, or a user with no Iran ping). Used to avoid stalling
+// a scan when the device actually has internet.
+func quickConnectivityCheck(timeout time.Duration) bool {
+	if timeout <= 0 || timeout > 4*time.Second {
+		timeout = 3 * time.Second
+	}
+	for _, host := range []string{"1.1.1.1:443", "8.8.8.8:53", "9.9.9.9:443"} {
+		c, err := net.DialTimeout("tcp", host, timeout)
+		if err == nil {
+			_ = c.Close()
+			return true
+		}
+	}
+	return false
 }
 
 var defaultTransportHealthSites = []string{
@@ -202,6 +224,62 @@ func probeTransportSiteWithRetry(ctx context.Context, site string, timeout time.
 	return false
 }
 
+// isDeviceOfflineError reports whether a probe failure indicates the scanning
+// DEVICE has lost connectivity (no route at all), as opposed to a target simply
+// being dead (connection refused / per-host timeout). These device-level errors
+// fail instantly, so a sudden burst of them means the phone/PC dropped its
+// network — not that thousands of IPs are individually dead.
+func isDeviceOfflineError(result *IPScanResult) bool {
+	if result == nil {
+		return false
+	}
+	reason := strings.ToLower(result.Error)
+	if reason == "" {
+		return false
+	}
+	return strings.Contains(reason, "network is unreachable") ||
+		strings.Contains(reason, "network is down") ||
+		strings.Contains(reason, "no route to host") ||
+		strings.Contains(reason, "host is unreachable") ||
+		strings.Contains(reason, "network unreachable")
+}
+
+// guardNetworkOutage pauses the scan when the device loses connectivity and
+// resumes it once connectivity returns. Without this, a transient outage makes
+// every remaining probe fail instantly ("network is unreachable") and the
+// pipeline races to the end in seconds, ending the scan far too early with only
+// the results found before the drop. Idempotent: only one guard runs at a time.
+func (s *Scanner) guardNetworkOutage(label string, timeout time.Duration) {
+	if s == nil {
+		return
+	}
+	if !atomic.CompareAndSwapInt32(&s.netGuardActive, 0, 1) {
+		return // a guard is already handling the outage
+	}
+	if timeout <= 0 {
+		timeout = 5 * time.Second
+	}
+	s.Pause()
+	s.logf("[HEALTH] %s: device network outage detected — pausing scan until connectivity returns\n", label)
+	go func() {
+		defer atomic.StoreInt32(&s.netGuardActive, 0)
+		for {
+			if s.IsStopped() {
+				s.Resume()
+				return
+			}
+			// Recover on a quick anycast TCP check, not the Iranian health sites,
+			// so the scan resumes even for users with no Iran ping.
+			if quickConnectivityCheck(timeout) {
+				s.Resume()
+				s.logf("[HEALTH] %s: connectivity restored — resuming scan\n", label)
+				return
+			}
+			time.Sleep(2 * time.Second)
+		}
+	}()
+}
+
 func (s *Scanner) ensureTransportHealthy(ctx context.Context, label string, sites []string, timeout time.Duration, minReachable int) TransportHealthSummary {
 	if ctx == nil {
 		ctx = context.Background()
@@ -227,6 +305,18 @@ func (s *Scanner) ensureTransportHealthy(ctx context.Context, label string, site
 			return summary
 		}
 
+		// The Iranian health sites are unreachable. If the device itself has
+		// working internet (verified with a fast anycast TCP dial), do NOT pause —
+		// the user may simply have no Iran ping, or the scan's own traffic is
+		// crowding out the health probes. Proceed with the scan immediately.
+		if quickConnectivityCheck(timeout) {
+			s.logf("[HEALTH] %s Iranian sites unreachable (%d/%d) but device is online; proceeding without the health gate\n", label, summary.Reachable, summary.Total)
+			if s != nil && s.IsPaused() {
+				s.Resume()
+			}
+			return summary
+		}
+
 		if time.Now().After(deadline) {
 			s.logf("[HEALTH] %s connectivity check inconclusive (%d/%d) after %s; proceeding with scan anyway\n", label, summary.Reachable, summary.Total, transportHealthMaxWait)
 			if s != nil && s.IsPaused() {
@@ -237,7 +327,7 @@ func (s *Scanner) ensureTransportHealthy(ctx context.Context, label string, site
 
 		if s != nil && !s.IsPaused() {
 			s.Pause()
-			s.logf("[HEALTH] %s connectivity low (%d/%d). Waiting up to %s for an Iranian domain to become reachable\n", label, summary.Reachable, summary.Total, transportHealthMaxWait)
+			s.logf("[HEALTH] %s device appears offline (%d/%d). Waiting up to %s for connectivity\n", label, summary.Reachable, summary.Total, transportHealthMaxWait)
 		}
 
 		select {
@@ -293,9 +383,21 @@ func (s *Scanner) startTransportHealthMonitor(ctx context.Context, label string,
 					s.logf("[HEALTH] %s monitor: health probe failed (%d/%d), %d/%d before pause\n", label, summary.Reachable, summary.Total, consecutiveFailures, transportHealthFailuresToPause)
 					continue
 				}
+				// Iranian sites unreachable for several checks. Only pause if the
+				// DEVICE is genuinely offline; if a quick anycast TCP dial succeeds,
+				// the user just has no Iran ping (or the scan is crowding out the
+				// probes) — never stall the scan in that case.
+				if quickConnectivityCheck(timeout) {
+					consecutiveFailures = 0
+					if s.IsPaused() {
+						s.Resume()
+						s.logf("[HEALTH] %s monitor: Iranian sites unreachable but device online; resuming\n", label)
+					}
+					continue
+				}
 				if !s.IsPaused() {
 					s.Pause()
-					s.logf("[HEALTH] %s monitor pause: no reachable Iranian domains after %d consecutive checks\n", label, consecutiveFailures)
+					s.logf("[HEALTH] %s monitor pause: device offline (no connectivity) after %d consecutive checks\n", label, consecutiveFailures)
 				}
 			}
 		}

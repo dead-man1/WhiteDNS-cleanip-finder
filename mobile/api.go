@@ -326,6 +326,10 @@ func StartIPScan(dataDir string, cfg *ScanConfig, l ScanListener) *ScanHandle {
 			l.OnDone("", "no IPs expanded from CIDRs")
 			return
 		}
+		stagedMsg := fmt.Sprintf("[IP-SCAN-START] targets=%d staged_ips=%d ports=%d total_probes=%d concurrency=%d",
+			len(targets), totalIPs, len(ports), totalIPs*len(ports), conc)
+		lf.write(stagedMsg)
+		l.OnLog(stagedMsg)
 
 		file, err := os.Open(tmpPath)
 		if err != nil {
@@ -399,6 +403,15 @@ func StartIPScan(dataDir string, cfg *ScanConfig, l ScanListener) *ScanHandle {
 		// Whether the scan finished or was stopped, partial results are already on
 		// disk — report success with the saved path so the Results screen shows
 		// them (a user-initiated stop is not an error).
+		reason := "completed"
+		if h.isStopped() {
+			reason = "stopped"
+		}
+		endMsg := fmt.Sprintf("[IP-SCAN-END] reason=%s staged_ips=%d processed_endpoints=%d/%d found=%d elapsed=%s",
+			reason, totalIPs, processedBase, totalEndpoints, foundTotal, time.Since(start).Round(time.Second))
+		lf.write(endMsg)
+		l.OnLog(endMsg)
+
 		savedPath := rf.close()
 		l.OnDone(savedPath, "")
 	}()

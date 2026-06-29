@@ -95,19 +95,56 @@ func initStorage() string {
 }
 
 func resolveDataDir() string {
+	// An explicit override always wins, even if not yet writable (we still try to
+	// create it). This lets users pin outputs to a chosen folder on any OS.
 	if override := strings.TrimSpace(os.Getenv("WHITE_PROXY_HOME")); override != "" {
 		return override
 	}
+
+	// Preferred locations in order. The first that is (or can be made) writable is
+	// used, so logs/outputs are always created on Linux/macOS even when the binary
+	// lives in a read-only location (e.g. /usr/local/bin, a DMG, or a macOS
+	// translocated/quarantined path).
+	var candidates []string
 	if exePath, err := os.Executable(); err == nil {
-		exeDir := filepath.Dir(exePath)
-		if strings.TrimSpace(exeDir) != "" {
-			return exeDir
+		if exeDir := strings.TrimSpace(filepath.Dir(exePath)); exeDir != "" {
+			candidates = append(candidates, exeDir)
 		}
 	}
 	if wd, err := os.Getwd(); err == nil && strings.TrimSpace(wd) != "" {
-		return wd
+		candidates = append(candidates, wd)
+	}
+	if home, err := os.UserHomeDir(); err == nil && strings.TrimSpace(home) != "" {
+		candidates = append(candidates, filepath.Join(home, ".whitedns"))
+	}
+	candidates = append(candidates, filepath.Join(os.TempDir(), "whitedns"))
+
+	for _, dir := range candidates {
+		if isWritableDir(dir) {
+			return dir
+		}
 	}
 	return "."
+}
+
+// isWritableDir reports whether dir can hold our output files. It creates the
+// directory if needed and verifies a file can actually be written there (a
+// directory can exist yet be read-only, which silently breaks logging).
+func isWritableDir(dir string) bool {
+	if strings.TrimSpace(dir) == "" {
+		return false
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return false
+	}
+	probe, err := os.CreateTemp(dir, ".whitedns_write_test_*")
+	if err != nil {
+		return false
+	}
+	name := probe.Name()
+	probe.Close()
+	os.Remove(name)
+	return true
 }
 
 func runProxy(cfg config.Config) {

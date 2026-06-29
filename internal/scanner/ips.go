@@ -759,6 +759,9 @@ func (s *Scanner) runThreeWavePipeline(ctx context.Context, endpoints []simpleEn
 	deadIPs := newDeadIPTracker(deadThreshold)
 	var lastProgressAt int64             // unix nano for throttling
 	var lastDomainConcurrencyCheck int64 // unix nano for checking domain concurrency adjustment
+	// Network-outage breaker (see optimized pipeline for rationale).
+	var netDownStreak int32
+	const netDownTrip = 15
 
 	// Reuse previously computed IP set
 	totalIPs := totalIPsInit
@@ -800,6 +803,14 @@ func (s *Scanner) runThreeWavePipeline(ctx context.Context, endpoints []simpleEn
 			result := s.probeIP(ctx, ip, port, probeOpts)
 			<-sem
 			probeLatency := time.Since(probeStarted)
+			// Trip the outage breaker on a burst of device-offline errors.
+			if isDeviceOfflineError(result) {
+				if atomic.AddInt32(&netDownStreak, 1) >= netDownTrip {
+					s.guardNetworkOutage("ip-scan", probeOpts.Timeout)
+				}
+			} else {
+				atomic.StoreInt32(&netDownStreak, 0)
+			}
 			if shouldCountAsDeadIP(result) {
 				s.logf("[TIMEOUT] %s:%d timeout - dead state recorded\n", ip, port)
 				atomic.AddInt32(&timeoutCount, 1)

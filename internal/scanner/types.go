@@ -51,6 +51,9 @@ type Scanner struct {
 	wg           sync.WaitGroup
 	// paused indicates the scanner is paused (1) or running (0)
 	paused int32
+	// netGuardActive is 1 while a network-outage guard goroutine is pausing the
+	// scan and polling for connectivity to return (prevents duplicate guards).
+	netGuardActive int32
 	// stopped, when 1, makes the probe pipelines abort in-flight and return
 	// promptly (used for responsive cancellation, e.g. mobile Stop()).
 	stopped int32
