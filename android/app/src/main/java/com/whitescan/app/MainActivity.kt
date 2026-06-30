@@ -7,6 +7,8 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
+import android.util.Log
+import android.widget.Toast
 import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -19,6 +21,8 @@ import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Density
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.whitescan.app.ui.*
@@ -42,6 +46,11 @@ class MainActivity : ComponentActivity() {
     // Launcher for the legacy (API <= 29) WRITE_EXTERNAL_STORAGE runtime prompt.
     private val legacyStoragePerm =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { /* result handled lazily */ }
+
+    // Android 13+ runtime notification permission, so the foreground-service
+    // scan notification can actually be shown.
+    private val notificationPerm =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { /* result ignored */ }
 
     // True when we can write to the public storage root.
     private fun hasAllFilesAccess(): Boolean =
@@ -89,9 +98,25 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         requestStorageAccess()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            notificationPerm.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
 
         setContent {
             WhiteDNSTheme {
+                // Clamp the font scale so very large system "font size" / "display
+                // size" accessibility settings can't warp/clip the layout on some
+                // devices, while still allowing moderate enlargement.
+                val baseDensity = LocalDensity.current
+                CompositionLocalProvider(
+                    LocalDensity provides Density(
+                        density = baseDensity.density,
+                        fontScale = baseDensity.fontScale.coerceIn(0.85f, 1.30f),
+                    )
+                ) {
                 var screen by remember { mutableStateOf<Screen>(Screen.Home) }
                 var pendingKind by remember { mutableStateOf(ScanKind.IP) }
                 var form by remember { mutableStateOf(FormState()) }
@@ -178,9 +203,25 @@ class MainActivity : ComponentActivity() {
                                     screen = Screen.AsnPicker
                                 },
                                 onStart = {
-                                    screen = Screen.Scanning(s.kind)
-                                    startForegroundScanService(s.kind)
-                                    vm.start(s.kind, currentScanDir().absolutePath, form.toEngineConfig())
+                                    // Build everything that can throw BEFORE navigating, and guard
+                                    // the whole launch so a failure shows a message instead of
+                                    // crashing the app (some users hit immediate crashes on scan
+                                    // start before any logging begins).
+                                    try {
+                                        val dir = currentScanDir().absolutePath
+                                        val engineCfg = form.toEngineConfig()
+                                        screen = Screen.Scanning(s.kind)
+                                        startForegroundScanService(s.kind)
+                                        vm.start(s.kind, dir, engineCfg)
+                                    } catch (e: Throwable) {
+                                        Log.e("MainActivity", "Failed to start scan", e)
+                                        Toast.makeText(
+                                            this@MainActivity,
+                                            "Could not start scan: ${e.message ?: e.javaClass.simpleName}",
+                                            Toast.LENGTH_LONG,
+                                        ).show()
+                                        screen = Screen.Config(s.kind)
+                                    }
                                 },
                             )
 
@@ -232,18 +273,33 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                 }
+                }
             }
         }
     }
 
     private fun startForegroundScanService(kind: ScanKind) {
-        val intent = ScanService.intentStart(this, kind.label())
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(intent)
-        else startService(intent)
+        // Starting a foreground service can throw on some OEM ROMs
+        // (MIUI/ColorOS/HyperOS), under Android 12+ background-start rules, or
+        // when notifications are restricted (ForegroundServiceStartNotAllowed-
+        // Exception / SecurityException). The scan itself runs in-process via the
+        // ViewModel, so a failure here must NOT crash the app — we just lose the
+        // persistent notification while the app is backgrounded.
+        try {
+            val intent = ScanService.intentStart(this, kind.label())
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(intent)
+            else startService(intent)
+        } catch (e: Throwable) {
+            Log.w("MainActivity", "Foreground service start failed; continuing without it", e)
+        }
     }
 
     private fun stopForegroundScanService() {
-        startService(ScanService.intentStop(this))
+        try {
+            startService(ScanService.intentStop(this))
+        } catch (e: Throwable) {
+            Log.w("MainActivity", "Foreground service stop failed", e)
+        }
     }
 }
 

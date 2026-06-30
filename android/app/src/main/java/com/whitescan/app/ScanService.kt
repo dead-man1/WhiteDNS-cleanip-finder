@@ -52,12 +52,24 @@ class ScanService : Service() {
     }
 
     private fun startForegroundScan(label: String, found: Int) {
-        startForeground(NOTIF_ID, buildNotification(label, found))
+        // startForeground can throw on restrictive OEM ROMs or under Android 12+
+        // background rules. The scan runs in the app process regardless, so if the
+        // OS refuses the foreground promotion we stop this (now-useless) service
+        // instead of crashing the app.
+        try {
+            startForeground(NOTIF_ID, buildNotification(label, found))
+        } catch (e: Throwable) {
+            try { stopSelf() } catch (_: Throwable) {}
+        }
     }
 
     private fun updateNotification(label: String, found: Int) {
-        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        nm.notify(NOTIF_ID, buildNotification(label, found))
+        try {
+            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            nm.notify(NOTIF_ID, buildNotification(label, found))
+        } catch (_: Throwable) {
+            // Notifications may be disabled/restricted — ignore.
+        }
     }
 
     private fun buildNotification(label: String, found: Int) =
