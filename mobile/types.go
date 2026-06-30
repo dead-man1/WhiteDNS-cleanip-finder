@@ -20,6 +20,8 @@ type ScanConfig struct {
 	SNIDomains    string // SNI scan: custom domains; empty -> managed defaults
 	SNIStrict     bool   // SNI scan: require SNI itself to be accepted
 	VerboseLog    bool   // emit per-endpoint probe log lines (slower; for debugging)
+	LiteMode      bool   // low-RAM/CPU mode for old/low-end devices (smaller chunks,
+	// lower concurrency, sequential domain probing, inter-chunk pauses)
 }
 
 // NewScanConfig returns an empty config (convenient constructor for gomobile,

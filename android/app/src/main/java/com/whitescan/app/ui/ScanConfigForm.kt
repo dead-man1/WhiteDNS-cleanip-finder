@@ -27,6 +27,7 @@ data class FormState(
     val sniDomains: String = "",
     val sniStrict: Boolean = false,
     val verboseLog: Boolean = false,
+    val liteMode: Boolean = false,
 )
 
 // Common single ports offered as checkboxes (multi-select). Ranges / anything
@@ -203,6 +204,22 @@ fun ScanConfigForm(
                     Text("Low bandwidth mode", style = MaterialTheme.typography.bodyMedium)
                     Text(
                         "Extends timeouts for slow / high-latency links",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            Spacer(Modifier.height(10.dp))
+            // Lite mode — for old / low-RAM devices that crash on big scans.
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Switch(
+                    checked = form.liteMode,
+                    onCheckedChange = { onFormChange(form.copy(liteMode = it)) },
+                )
+                Column {
+                    Text("Lite mode (old / low-RAM devices)", style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        "Smaller batches and low concurrency to avoid crashes on weak phones (slower, same coverage)",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )

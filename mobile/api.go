@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -265,6 +266,17 @@ func concurrencyOrDefault(c, def int) int {
 const (
 	chunkIPCount  = 4000  // IPs scanned per chunk (bounds per-chunk RAM)
 	perCIDRMaxIPs = 65536 // matches the desktop engine's per-CIDR expansion cap
+
+	// Lite mode (old / low-RAM devices): much smaller chunks and a hard low
+	// concurrency cap to keep peak memory, fd usage and CPU minimal.
+	liteChunkIPCount   = 1000
+	liteMaxConcurrency = 15
+
+	// Staging de-duplication set caps (the only RAM cost while expanding targets
+	// to disk). Normal mode dedups up to ~400k unique IPs (~25 MB); Lite mode
+	// keeps it tiny so big ASNs stage with almost no RAM on weak devices.
+	stageDedupCap = 400_000
+	liteDedupCap  = 20_000
 )
 
 // interChunkPause returns a short delay inserted between chunks so the scan does
@@ -354,6 +366,18 @@ func StartIPScan(dataDir string, cfg *ScanConfig, l ScanListener) *ScanHandle {
 	conc := concurrencyOrDefault(cfg.Concurrency, 50) // phone default: 50 workers
 	timeout := timeoutOrDefault(cfg.TimeoutMs, scanner.ScanTimeout, cfg.LowBandwidth)
 
+	// Lite mode for old / low-RAM devices: smaller chunks, far lower concurrency,
+	// sequential per-IP domain probing, and inter-chunk pauses. This keeps peak
+	// memory, open file descriptors, and CPU low enough that the scan doesn't
+	// OOM/ANR-crash on weak hardware. Coverage is unchanged — only resource use.
+	chunkSize := chunkIPCount
+	if cfg.LiteMode {
+		chunkSize = liteChunkIPCount
+		if conc > liteMaxConcurrency {
+			conc = liteMaxConcurrency
+		}
+	}
+
 	sc.SetTargetPorts(ports)
 	sc.SetVerboseProbeLogging(cfg.VerboseLog)
 
@@ -381,7 +405,7 @@ func StartIPScan(dataDir string, cfg *ScanConfig, l ScanListener) *ScanHandle {
 			Timeout:                timeout,
 			DisableAutoConcurrency: true,
 		}
-		if conc <= 25 || cfg.LowBandwidth {
+		if conc <= 25 || cfg.LowBandwidth || cfg.LiteMode {
 			o.AdaptiveDomainConcurrency = 1
 		}
 		return o
@@ -392,8 +416,14 @@ func StartIPScan(dataDir string, cfg *ScanConfig, l ScanListener) *ScanHandle {
 		defer lf.close()
 
 		// 1. Stream-expand all CIDRs/IPs to a temp file (low RAM, full coverage).
+		// Lite mode uses a tiny dedup set so even huge ASNs stage with minimal RAM
+		// (a single ASN has no internal duplicates, so nothing is lost).
+		dedupCap := stageDedupCap
+		if cfg.LiteMode {
+			dedupCap = liteDedupCap
+		}
 		tmpPath := filepath.Join(dataDir, "tmp", fmt.Sprintf("targets-%d.txt", time.Now().UnixNano()))
-		totalIPs, err := expandTargetsToFile(targets, tmpPath)
+		totalIPs, err := expandTargetsToFile(targets, tmpPath, dedupCap)
 		if err != nil {
 			l.OnDone("", "could not stage targets: "+err.Error())
 			return
@@ -453,7 +483,7 @@ func StartIPScan(dataDir string, cfg *ScanConfig, l ScanListener) *ScanHandle {
 		// 3. Read the staged IP file chunk by chunk.
 		fileScanner := bufio.NewScanner(file)
 		fileScanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-		chunk := make([]string, 0, chunkIPCount)
+		chunk := make([]string, 0, chunkSize)
 		for fileScanner.Scan() {
 			if h.isStopped() {
 				break
@@ -466,10 +496,15 @@ func StartIPScan(dataDir string, cfg *ScanConfig, l ScanListener) *ScanHandle {
 				continue
 			}
 			chunk = append(chunk, line)
-			if len(chunk) >= chunkIPCount {
+			if len(chunk) >= chunkSize {
 				runChunk(chunk)
 				chunk = chunk[:0]
-				if pause > 0 && !h.isStopped() {
+				if cfg.LiteMode {
+					// Reclaim the chunk's memory promptly so peak RAM stays low on
+					// weak devices, then breathe before the next chunk.
+					runtime.GC()
+					time.Sleep(300 * time.Millisecond)
+				} else if pause > 0 && !h.isStopped() {
 					time.Sleep(pause) // ease bandwidth between chunks
 				}
 			}
@@ -500,7 +535,12 @@ func StartIPScan(dataDir string, cfg *ScanConfig, l ScanListener) *ScanHandle {
 // line, without holding the full set in RAM. ip:port targets and bare IPs pass
 // through unchanged. Each CIDR is capped at perCIDRMaxIPs (matching the desktop
 // engine) so a single huge prefix can't fill the disk. Returns the line count.
-func expandTargetsToFile(targets []string, path string) (int, error) {
+// expandTargetsToFile streams every IP to path. dedupCap bounds the size of the
+// de-duplication set (its only RAM cost): once reached, the rest is emitted
+// unfiltered so memory can never blow up. A single ASN's CIDRs don't overlap,
+// so its dedup set finds nothing — Lite mode therefore passes a tiny cap (or 0
+// to disable) to stage huge ASNs with almost no RAM, WITHOUT dropping any IPs.
+func expandTargetsToFile(targets []string, path string, dedupCap int) (int, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return 0, err
 	}
@@ -511,15 +551,14 @@ func expandTargetsToFile(targets []string, path string) (int, error) {
 	w := bufio.NewWriterSize(f, 64*1024)
 	count := 0
 	// De-duplicate addresses so overlapping CIDRs/ASNs (e.g. selecting both a /16
-	// and a /24 inside it) don't scan the same IP twice. The seen-set is memory-
-	// capped: once it reaches dedupCap entries we stop tracking and emit the rest
-	// unfiltered, so a pathologically huge scan can never OOM the device. For
-	// typical scans (hundreds of thousands of IPs) it stays well under the cap and
-	// removes all duplicates. Result-neutral — only redundant work is skipped.
-	const dedupCap = 400_000
-	seen := make(map[string]struct{}, 1024)
+	// and a /24 inside it) don't scan the same IP twice. Result-neutral — only
+	// redundant work is skipped. dedupCap <= 0 disables it entirely (lowest RAM).
+	var seen map[string]struct{}
+	if dedupCap > 0 {
+		seen = make(map[string]struct{}, 1024)
+	}
 	emit := func(line string) {
-		if len(seen) < dedupCap {
+		if seen != nil && len(seen) < dedupCap {
 			if _, dup := seen[line]; dup {
 				return
 			}

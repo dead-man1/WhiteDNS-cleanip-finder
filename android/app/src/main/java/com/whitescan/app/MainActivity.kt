@@ -325,5 +325,6 @@ private fun FormState.toEngineConfig(): ScanConfig {
     cfg.setSNIDomains(sniDomains.trim())
     cfg.setSNIStrict(sniStrict)
     cfg.setVerboseLog(verboseLog)
+    cfg.setLiteMode(liteMode)
     return cfg
 }
