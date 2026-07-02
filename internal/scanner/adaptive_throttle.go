@@ -9,12 +9,20 @@ import (
 // AdaptiveThrottle dynamically adjusts concurrency based on timeout rates
 // Inspired by Python's cores/adaptive_throttle.py
 type AdaptiveThrottle struct {
+	// These two are accessed with 64-bit atomics (atomic.AddInt64 etc). On 32-bit
+	// platforms (e.g. armv7/GOARCH=arm) a 64-bit atomic operand MUST be 8-byte
+	// aligned or the program panics with "unaligned 64-bit atomic operation".
+	// Go only guarantees 64-bit alignment for the *first word* of an allocated
+	// struct, so these MUST stay at the very top — do not move them below the
+	// int32 fields, which would push them to a 4-byte-aligned offset and crash
+	// the scan on 32-bit devices. See https://pkg.go.dev/sync/atomic#pkg-note-BUG
+	timeouts  int64
+	successes int64
+
 	mu           sync.RWMutex
 	currentLimit int32
 	maxLimit     int32
 	minLimit     int32
-	timeouts     int64
-	successes    int64
 	// Use a larger sample window to avoid reacting to short, scan-local
 	// bursts of timeouts caused by large numbers of dead IPs.
 	windowSize         int
