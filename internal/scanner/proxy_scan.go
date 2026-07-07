@@ -271,8 +271,8 @@ func (s *Scanner) scanProxyCandidates(candidates []string, concurrency int, time
 
 	var mu sync.Mutex
 	var verified []ProxyScanResult
-	var completed int64
-	var hits int64
+	var completed atomic.Int64
+	var hits atomic.Int64
 
 	jobs := make(chan string, concurrency*2)
 	var wg sync.WaitGroup
@@ -282,7 +282,7 @@ func (s *Scanner) scanProxyCandidates(candidates []string, concurrency int, time
 			defer wg.Done()
 			for endpoint := range jobs {
 				if !s.waitWhilePaused() {
-					atomic.AddInt64(&completed, 1)
+					completed.Add(1)
 					continue
 				}
 				start := time.Now()
@@ -307,14 +307,14 @@ func (s *Scanner) scanProxyCandidates(candidates []string, concurrency int, time
 					mu.Lock()
 					verified = append(verified, result)
 					mu.Unlock()
-					atomic.AddInt64(&hits, 1)
+					hits.Add(1)
 					s.logf("[+] %s\n", formatProxyResult(result))
 				}
-				processed := atomic.AddInt64(&completed, 1)
+				processed := completed.Add(1)
 				if processed%50 == 0 || processed == int64(total) {
-					s.logf("[*] Verified %d/%d | Found %d\n", processed, total, atomic.LoadInt64(&hits))
+					s.logf("[*] Verified %d/%d | Found %d\n", processed, total, hits.Load())
 					if s.proxyProgressCb != nil {
-						s.proxyProgressCb(int(processed), total, int(atomic.LoadInt64(&hits)), "", total)
+						s.proxyProgressCb(int(processed), total, int(hits.Load()), "", total)
 					}
 				}
 			}
@@ -326,7 +326,7 @@ func (s *Scanner) scanProxyCandidates(candidates []string, concurrency int, time
 	}
 	close(jobs)
 	wg.Wait()
-	s.logf("[DEBUG] scanProxyCandidates complete (%s) processed=%d hits=%d\n", protocol, atomic.LoadInt64(&completed), atomic.LoadInt64(&hits))
+	s.logf("[DEBUG] scanProxyCandidates complete (%s) processed=%d hits=%d\n", protocol, completed.Load(), hits.Load())
 	return verified
 }
 
@@ -371,12 +371,12 @@ func (s *Scanner) scanProxyCandidatesWave3(candidates []string, maxTimeout time.
 		mu       sync.Mutex
 		wg       sync.WaitGroup
 
-		w1Done int64
-		w1Pass int64
-		w2Done int64
-		w2Pass int64
-		w3Done int64
-		w3Pass int64
+		w1Done atomic.Int64
+		w1Pass atomic.Int64
+		w2Done atomic.Int64
+		w2Pass atomic.Int64
+		w3Done atomic.Int64
+		w3Pass atomic.Int64
 	)
 
 	tickEvery := total / 400
@@ -389,13 +389,13 @@ func (s *Scanner) scanProxyCandidatesWave3(candidates []string, maxTimeout time.
 			return
 		}
 		s.logf("[*] pipeline: w1 %d/%d w2 %d/%d w3 %d/%d found=%d\n",
-			atomic.LoadInt64(&w1Pass), atomic.LoadInt64(&w1Done),
-			atomic.LoadInt64(&w2Pass), atomic.LoadInt64(&w2Done),
-			atomic.LoadInt64(&w3Pass), atomic.LoadInt64(&w3Done),
-			int(atomic.LoadInt64(&w3Pass)),
+			w1Pass.Load(), w1Done.Load(),
+			w2Pass.Load(), w2Done.Load(),
+			w3Pass.Load(), w3Done.Load(),
+			int(w3Pass.Load()),
 		)
 		if s.proxyProgressCb != nil {
-			s.proxyProgressCb(int(done), total, int(atomic.LoadInt64(&w3Pass)), "", total)
+			s.proxyProgressCb(int(done), total, int(w3Pass.Load()), "", total)
 		}
 	}
 
@@ -406,7 +406,7 @@ func (s *Scanner) scanProxyCandidatesWave3(candidates []string, maxTimeout time.
 			defer wg.Done()
 			defer func() { <-taskSlots }()
 			if !s.waitWhilePaused() {
-				atomic.AddInt64(&w1Done, 1)
+				w1Done.Add(1)
 				return
 			}
 			start := time.Now()
@@ -415,14 +415,14 @@ func (s *Scanner) scanProxyCandidatesWave3(candidates []string, maxTimeout time.
 			sem1 <- struct{}{}
 			if !s.waitWhilePaused() {
 				<-sem1
-				atomic.AddInt64(&w1Done, 1)
+				w1Done.Add(1)
 				return
 			}
 			ok := httpWave1(ep, w1Timeout)
 			<-sem1
-			done := atomic.AddInt64(&w1Done, 1)
+			done := w1Done.Add(1)
 			if ok {
-				atomic.AddInt64(&w1Pass, 1)
+				w1Pass.Add(1)
 			} else {
 				report(done)
 				return
@@ -436,9 +436,9 @@ func (s *Scanner) scanProxyCandidatesWave3(candidates []string, maxTimeout time.
 			}
 			ok = httpWave2(ep, w2Timeout)
 			<-sem2
-			atomic.AddInt64(&w2Done, 1)
+			w2Done.Add(1)
 			if ok {
-				atomic.AddInt64(&w2Pass, 1)
+				w2Pass.Add(1)
 			} else {
 				report(done)
 				return
@@ -452,9 +452,9 @@ func (s *Scanner) scanProxyCandidatesWave3(candidates []string, maxTimeout time.
 			}
 			ok = httpWave3(ep, w3Timeout)
 			<-sem3
-			atomic.AddInt64(&w3Done, 1)
+			w3Done.Add(1)
 			if ok {
-				atomic.AddInt64(&w3Pass, 1)
+				w3Pass.Add(1)
 				result := ProxyScanResult{
 					Protocol: "http",
 					Endpoint: ep,
@@ -483,7 +483,7 @@ func (s *Scanner) scanProxyCandidatesWave3(candidates []string, maxTimeout time.
 	wg.Wait()
 
 	if s.proxyProgressCb != nil {
-		s.proxyProgressCb(total, total, int(atomic.LoadInt64(&w3Pass)), "", total)
+		s.proxyProgressCb(total, total, int(w3Pass.Load()), "", total)
 	}
 	s.logf("[DEBUG] Pipelined Wave3 complete: final verified=%d\n", len(verified))
 	return verified
@@ -504,8 +504,8 @@ func (s *Scanner) runProxyWaveOptimized(candidates []string, concurrency int, ti
 
 	var verified []ProxyScanResult
 	var mu sync.Mutex
-	var processedCount int64
-	var lastReport int64
+	var processedCount atomic.Int64
+	var lastReport atomic.Int64
 
 	// Buffered channel for batch efficiency
 	jobs := make(chan string, concurrency)
@@ -518,7 +518,7 @@ func (s *Scanner) runProxyWaveOptimized(candidates []string, concurrency int, ti
 			defer wg.Done()
 			for endpoint := range jobs {
 				if !s.waitWhilePaused() {
-					atomic.AddInt64(&processedCount, 1)
+					processedCount.Add(1)
 					continue
 				}
 				var passed bool
@@ -547,9 +547,10 @@ func (s *Scanner) runProxyWaveOptimized(candidates []string, concurrency int, ti
 				}
 
 				// Progress reporting every 200 or at end
-				processed := atomic.AddInt64(&processedCount, 1)
-				if processed-lastReport >= 2000 || processed == int64(total) {
-					atomic.StoreInt64(&lastReport, processed)
+				processed := processedCount.Add(1)
+				last := lastReport.Load()
+				if processed-last >= 2000 || processed == int64(total) {
+					lastReport.Store(processed)
 					s.logf("[*] %s: %d/%d processed\n", waveName, processed, total)
 				}
 			}

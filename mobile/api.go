@@ -25,7 +25,7 @@ import (
 // Allows at most one event per periodMs. Lock-free (atomic CAS on timestamp).
 
 type throttle struct {
-	lastMs   int64
+	lastMs   atomic.Int64
 	periodMs int64
 }
 
@@ -35,11 +35,11 @@ func newThrottle(period time.Duration) *throttle {
 
 func (t *throttle) allow() bool {
 	now := time.Now().UnixMilli()
-	last := atomic.LoadInt64(&t.lastMs)
+	last := t.lastMs.Load()
 	if now-last < t.periodMs {
 		return false
 	}
-	return atomic.CompareAndSwapInt64(&t.lastMs, last, now)
+	return t.lastMs.CompareAndSwap(last, now)
 }
 
 // ── resultFile ───────────────────────────────────────────────────────────────

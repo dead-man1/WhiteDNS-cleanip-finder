@@ -86,7 +86,7 @@ func (s *Scanner) runThreeWavePipelineOptimized(ctx context.Context, endpoints [
 		deadThreshold = total
 	}
 	deadIPs := newDeadIPTracker(deadThreshold)
-	var lastProgressAt int64 // unix nano
+	var lastProgressAt atomic.Int64 // unix nano
 	// Network-outage breaker: a run of instant device-offline failures means the
 	// device lost its network, not that IPs are dead. Pause fast (don't wait the
 	// ~24s the health monitor needs) so the scan doesn't race to the end.
@@ -185,7 +185,7 @@ func (s *Scanner) runThreeWavePipelineOptimized(ctx context.Context, endpoints [
 
 					// Throttle progress callback for massive scans (every 25 probes or about 250ms).
 					now := time.Now().UnixNano()
-					lastProg := atomic.LoadInt64(&lastProgressAt)
+					lastProg := lastProgressAt.Load()
 					shouldReport := current >= total ||
 						current%25 == 0 ||
 						lastProg == 0 ||
@@ -194,7 +194,7 @@ func (s *Scanner) runThreeWavePipelineOptimized(ctx context.Context, endpoints [
 					if progressCb != nil && shouldReport {
 						progressCb(current, total, int(atomic.LoadInt32(&acceptedCount)),
 							fmt.Sprintf("%s:%d", job.ip, job.port), totalIPsInit)
-						atomic.StoreInt64(&lastProgressAt, now)
+						lastProgressAt.Store(now)
 					}
 				}
 			}

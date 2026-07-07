@@ -9,15 +9,15 @@ import (
 // AdaptiveThrottle dynamically adjusts concurrency based on timeout rates
 // Inspired by Python's cores/adaptive_throttle.py
 type AdaptiveThrottle struct {
-	// These two are accessed with 64-bit atomics (atomic.AddInt64 etc). On 32-bit
+	// These typed 64-bit atomics are explicitly aligned. On 32-bit
 	// platforms (e.g. armv7/GOARCH=arm) a 64-bit atomic operand MUST be 8-byte
 	// aligned or the program panics with "unaligned 64-bit atomic operation".
 	// Go only guarantees 64-bit alignment for the *first word* of an allocated
 	// struct, so these MUST stay at the very top — do not move them below the
 	// int32 fields, which would push them to a 4-byte-aligned offset and crash
 	// the scan on 32-bit devices. See https://pkg.go.dev/sync/atomic#pkg-note-BUG
-	timeouts  int64
-	successes int64
+	timeouts  atomic.Int64
+	successes atomic.Int64
 
 	mu           sync.RWMutex
 	currentLimit int32
@@ -47,13 +47,13 @@ func NewAdaptiveThrottle(initialLimit, minLimit, maxLimit int, targetTimeoutRate
 
 // RecordSuccess records a successful probe
 func (at *AdaptiveThrottle) RecordSuccess() {
-	atomic.AddInt64(&at.successes, 1)
+	at.successes.Add(1)
 	at.maybeAdjust()
 }
 
 // RecordTimeout records a timeout/failure
 func (at *AdaptiveThrottle) RecordTimeout() {
-	atomic.AddInt64(&at.timeouts, 1)
+	at.timeouts.Add(1)
 	at.maybeAdjust()
 }
 
@@ -67,8 +67,8 @@ func (at *AdaptiveThrottle) maybeAdjust() {
 		return // Only adjust every 3 seconds
 	}
 
-	successes := atomic.LoadInt64(&at.successes)
-	timeouts := atomic.LoadInt64(&at.timeouts)
+	successes := at.successes.Load()
+	timeouts := at.timeouts.Load()
 	total := successes + timeouts
 
 	if total < int64(at.windowSize) {
@@ -99,8 +99,8 @@ func (at *AdaptiveThrottle) maybeAdjust() {
 	}
 
 	// Reset counters
-	atomic.StoreInt64(&at.successes, 0)
-	atomic.StoreInt64(&at.timeouts, 0)
+	at.successes.Store(0)
+	at.timeouts.Store(0)
 	at.lastAdjustmentTime = now
 }
 
@@ -122,8 +122,8 @@ func (at *AdaptiveThrottle) SetLimit(limit int) {
 
 // GetTimeoutRate returns the current timeout rate (timeouts / total)
 func (at *AdaptiveThrottle) GetTimeoutRate() float64 {
-	successes := atomic.LoadInt64(&at.successes)
-	timeouts := atomic.LoadInt64(&at.timeouts)
+	successes := at.successes.Load()
+	timeouts := at.timeouts.Load()
 	total := successes + timeouts
 	if total == 0 {
 		return 0.0

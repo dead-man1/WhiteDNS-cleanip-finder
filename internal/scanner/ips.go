@@ -751,8 +751,8 @@ func (s *Scanner) runThreeWavePipeline(ctx context.Context, endpoints []simpleEn
 		deadThreshold = len(endpoints)
 	}
 	deadIPs := newDeadIPTracker(deadThreshold)
-	var lastProgressAt int64             // unix nano for throttling
-	var lastDomainConcurrencyCheck int64 // unix nano for checking domain concurrency adjustment
+	var lastProgressAt atomic.Int64             // unix nano for throttling
+	var lastDomainConcurrencyCheck atomic.Int64 // unix nano for checking domain concurrency adjustment
 	// Network-outage breaker (see optimized pipeline for rationale).
 	var netDownStreak int32
 	const netDownTrip = 15
@@ -854,7 +854,7 @@ func (s *Scanner) runThreeWavePipeline(ctx context.Context, endpoints []simpleEn
 
 			// Throttle progress callback: report every 25 probes or about 250ms.
 			now := time.Now().UnixNano()
-			lastProg := atomic.LoadInt64(&lastProgressAt)
+			lastProg := lastProgressAt.Load()
 			shouldReport := current >= total ||
 				current%25 == 0 ||
 				lastProg == 0 ||
@@ -862,11 +862,11 @@ func (s *Scanner) runThreeWavePipeline(ctx context.Context, endpoints []simpleEn
 
 			if progressCb != nil && shouldReport {
 				progressCb(current, total, int(atomic.LoadInt32(&acceptedCount)), fmt.Sprintf("%s:%d", ip, port), totalIPs)
-				atomic.StoreInt64(&lastProgressAt, now)
+				lastProgressAt.Store(now)
 			}
 
 			// Periodically recalculate adaptive domain concurrency based on current timeout rate
-			lastDomainConcCheck := atomic.LoadInt64(&lastDomainConcurrencyCheck)
+			lastDomainConcCheck := lastDomainConcurrencyCheck.Load()
 			if lastDomainConcCheck == 0 || now-lastDomainConcCheck >= 5000000000 { // every 5 seconds
 				timeoutRate := throttle.GetTimeoutRate()
 				newDomainConcurrency := calculateAdaptiveDomainConcurrency(len(endpoints), timeoutRate)
@@ -879,7 +879,7 @@ func (s *Scanner) runThreeWavePipeline(ctx context.Context, endpoints []simpleEn
 					s.logf("[ADAPTIVE] Domain concurrency: %d → %d (endpoints=%d, timeout_rate=%.1f%%)\n",
 						oldConcurrency, newDomainConcurrency, len(endpoints), timeoutRate*100)
 				}
-				atomic.StoreInt64(&lastDomainConcurrencyCheck, now)
+				lastDomainConcurrencyCheck.Store(now)
 			}
 		}(e.ip, e.port)
 	}

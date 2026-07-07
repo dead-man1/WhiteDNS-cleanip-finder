@@ -707,13 +707,13 @@ func isValidIP(ip string) bool {
 
 // Atomic counter for concurrent progress tracking
 type atomicCounter struct {
-	value int64
+	value atomic.Int64
 }
 
 func (ac *atomicCounter) increment() int64 {
-	return atomic.AddInt64(&ac.value, 1)
+	return ac.value.Add(1)
 }
 
 func (ac *atomicCounter) get() int64 {
-	return atomic.LoadInt64(&ac.value)
+	return ac.value.Load()
 }
