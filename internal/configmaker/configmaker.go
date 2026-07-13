@@ -181,6 +181,13 @@ func rewriteConfig(configText, target string) string {
 	if strings.HasPrefix(strings.ToLower(configText), "vmess://") {
 		return rewriteVmess(configText, target)
 	}
+	return rewriteURLStyle(configText, target)
+}
+
+// rewriteURLStyle repoints a standard URL-form config (vless/trojan/ss/...) at
+// the target, preserving the userinfo (uuid/password) and setting the fragment
+// label. Returns the input unchanged if it does not parse as a URL.
+func rewriteURLStyle(configText, target string) string {
 	parsed, err := url.Parse(configText)
 	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
 		return configText
@@ -199,8 +206,11 @@ func rewriteConfig(configText, target string) string {
 }
 
 // rewriteVmess decodes a vmess:// base64-JSON config, points its address/port at
-// the target, and re-encodes it. On any failure it returns the original config
-// unchanged (so a malformed entry never silently disappears).
+// the target, and re-encodes it. Some clients emit a non-standard URL-form
+// vmess (vmess://uuid@host:port?...#label) instead of base64 JSON; when the
+// payload is not valid base64 JSON we fall back to URL-style rewriting so the
+// host is still repointed rather than the entry silently passing through
+// unchanged.
 func rewriteVmess(configText, target string) string {
 	payload := configText[len("vmess://"):]
 	if i := strings.IndexAny(payload, "#?"); i >= 0 {
@@ -208,11 +218,11 @@ func rewriteVmess(configText, target string) string {
 	}
 	raw, ok := decodeFlexibleBase64(payload)
 	if !ok {
-		return configText
+		return rewriteURLStyle(configText, target)
 	}
 	var m map[string]interface{}
 	if err := json.Unmarshal(raw, &m); err != nil {
-		return configText
+		return rewriteURLStyle(configText, target)
 	}
 	host, port, err := net.SplitHostPort(target)
 	if err != nil || host == "" || net.ParseIP(host) == nil {

@@ -39,6 +39,22 @@ var dnsWorkerPresets = []dnsWorkerPreset{
 // defaultDNSWorkers is used when the user has not visited the worker screen.
 const defaultDNSWorkers = 64
 
+// screenDNSNearby asks whether to expand the /24 around each tunnel-ready
+// resolver and rescan it ("Test Nearby IPs"). This can multiply the scan size
+// by 256 per hit, so it is opt-in rather than automatic.
+const screenDNSNearby = "dns_nearby"
+
+// dnsNearbyPreset couples a menu label with the nearby-expansion toggle.
+type dnsNearbyPreset struct {
+	label  string
+	enable bool
+}
+
+var dnsNearbyPresets = []dnsNearbyPreset{
+	{"No - scan only the resolvers I listed (default)", false},
+	{"Yes - also expand the /24 around each tunnel-ready hit", true},
+}
+
 // dnsPortPreset couples a menu label with the engine protocol + port set.
 type dnsPortPreset struct {
 	label    string
@@ -51,6 +67,23 @@ var dnsPortPresets = []dnsPortPreset{
 	{"DoT - DNS-over-TLS (853)", "all", []int{853}},
 	{"DoH - DNS-over-HTTPS (443)", "all", []int{443}},
 	{"All valid DNS ports (53 + 853 + 443)", "all", []int{53, 853, 443}},
+}
+
+// screenDNSReference lets the user pick the trusted reference resolver used to
+// build the truth table that candidate answers are checked against for
+// poisoning.
+const screenDNSReference = "dns_reference"
+
+// dnsReferencePreset couples a menu label with a dnsscan reference provider id.
+type dnsReferencePreset struct {
+	label    string
+	provider string // dnsscan.ReferenceGoogle / ReferenceCloudflare
+}
+
+var dnsReferencePresets = []dnsReferencePreset{
+	{"Google Public DNS - 8.8.8.8 (default reference)", dnsscan.ReferenceGoogle},
+	{"Cloudflare - 1.1.1.1", dnsscan.ReferenceCloudflare},
+	{"Quad9 - 9.9.9.9", dnsscan.ReferenceQuad9},
 }
 
 // gotoDNSPorts is entered once resolver targets are chosen (from any source).
@@ -82,8 +115,8 @@ func (m tuiModel) handleDNSPortsScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
 		m.dnsProtocol = p.protocol
 		m.scanConfig.Ports = append([]int(nil), p.ports...)
 		m.addLog(fmt.Sprintf("DNS scan transport: %s", p.label))
-		m.pushScreen(screenDNSWorkers)
-		m.cursor = 2 // default to the 64-worker preset
+		m.pushScreen(screenDNSReference)
+		m.cursor = 0 // default to Google
 	}
 	return m, nil
 }
@@ -95,6 +128,44 @@ func (m tuiModel) viewDNSPorts(w, h int) string {
 		items[i] = p.label
 	}
 	return m.viewList(w, h, "DNS PORTS / TRANSPORT", items,
+		"↑↓ navigate  ·  Enter next  ·  Esc back")
+}
+
+// handleDNSReferenceScreen picks the trusted reference resolver, then advances
+// to the worker-count picker.
+func (m tuiModel) handleDNSReferenceScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
+	k, ok := msg.(tea.KeyMsg)
+	if !ok {
+		return m, nil
+	}
+	switch k.String() {
+	case "up", "k":
+		if m.cursor > 0 {
+			m.cursor--
+		}
+	case "down", "j":
+		if m.cursor < len(dnsReferencePresets)-1 {
+			m.cursor++
+		}
+	case "esc":
+		m.goBack()
+	case "enter":
+		p := dnsReferencePresets[m.cursor]
+		m.dnsReference = p.provider
+		m.addLog(fmt.Sprintf("DNS scan reference resolver: %s", p.label))
+		m.pushScreen(screenDNSWorkers)
+		m.cursor = 2 // default to the 64-worker preset
+	}
+	return m, nil
+}
+
+// viewDNSReference renders the reference-resolver picker using the list style.
+func (m tuiModel) viewDNSReference(w, h int) string {
+	items := make([]string, len(dnsReferencePresets))
+	for i, p := range dnsReferencePresets {
+		items[i] = p.label
+	}
+	return m.viewList(w, h, "REFERENCE RESOLVER (truth source)", items,
 		"↑↓ navigate  ·  Enter next  ·  Esc back")
 }
 
@@ -119,7 +190,8 @@ func (m tuiModel) handleDNSWorkersScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
 		p := dnsWorkerPresets[m.cursor]
 		m.dnsConcurrency = p.workers
 		m.addLog(fmt.Sprintf("DNS scan workers: %d", p.workers))
-		return m.launchDNSScan(m.scanConfig.Targets)
+		m.pushScreen(screenDNSNearby)
+		m.cursor = 0 // default to "No"
 	}
 	return m, nil
 }
@@ -131,6 +203,46 @@ func (m tuiModel) viewDNSWorkers(w, h int) string {
 		items[i] = p.label
 	}
 	return m.viewList(w, h, "DNS SCAN WORKERS", items,
+		"↑↓ navigate  ·  Enter next  ·  Esc back")
+}
+
+// handleDNSNearbyScreen picks the nearby-expansion setting and launches the scan.
+func (m tuiModel) handleDNSNearbyScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
+	k, ok := msg.(tea.KeyMsg)
+	if !ok {
+		return m, nil
+	}
+	switch k.String() {
+	case "up", "k":
+		if m.cursor > 0 {
+			m.cursor--
+		}
+	case "down", "j":
+		if m.cursor < len(dnsNearbyPresets)-1 {
+			m.cursor++
+		}
+	case "esc":
+		m.goBack()
+	case "enter":
+		p := dnsNearbyPresets[m.cursor]
+		m.dnsTestNearby = p.enable
+		if p.enable {
+			m.addLog("DNS scan: Test Nearby IPs enabled (expands /24 around tunnel-ready hits)")
+		} else {
+			m.addLog("DNS scan: Test Nearby IPs disabled")
+		}
+		return m.launchDNSScan(m.scanConfig.Targets)
+	}
+	return m, nil
+}
+
+// viewDNSNearby renders the nearby-expansion picker using the shared list style.
+func (m tuiModel) viewDNSNearby(w, h int) string {
+	items := make([]string, len(dnsNearbyPresets))
+	for i, p := range dnsNearbyPresets {
+		items[i] = p.label
+	}
+	return m.viewList(w, h, "TEST NEARBY IPs", items,
 		"↑↓ navigate  ·  Enter start scan  ·  Esc back")
 }
 
@@ -178,6 +290,11 @@ func (m tuiModel) cmdDNSScan(targets []string) tea.Cmd {
 	if workers <= 0 {
 		workers = defaultDNSWorkers
 	}
+	testNearby := m.dnsTestNearby
+	reference := m.dnsReference
+	if reference == "" {
+		reference = dnsscan.ReferenceGoogle
+	}
 
 	return tea.Batch(
 		func() tea.Msg {
@@ -204,12 +321,13 @@ func (m tuiModel) cmdDNSScan(targets []string) tea.Cmd {
 			trySend(scanProgressMsg{current: 0, total: total, startTime: start, totalIPs: total})
 
 			opts := dnsscan.Options{
-				TargetDomain: "google.com",
-				Timeout:      3 * time.Second,
-				Concurrency:  workers,
-				Protocol:     protocol,
-				Ports:        ports,
-				TestNearby:   true,
+				TargetDomain:  "google.com",
+				Timeout:       3 * time.Second,
+				Concurrency:   workers,
+				Protocol:      protocol,
+				Ports:         ports,
+				TestNearby:    testNearby,
+				TruthProvider: reference,
 			}
 
 			var mu sync.Mutex
@@ -275,7 +393,7 @@ func (m tuiModel) cmdDNSScan(targets []string) tea.Cmd {
 				trySend(logMsg{text: "[DNS] report write failed: " + err.Error()})
 			} else {
 				trySend(logMsg{text: "[DNS] reports written to " + paths.Dir})
-				trySend(logMsg{text: "    " + filepath.Base(paths.Full) + " / " + filepath.Base(paths.CSV) + " / " + filepath.Base(paths.HTML) + " / " + filepath.Base(paths.JSON)})
+				trySend(logMsg{text: "    " + filepath.Base(paths.Full) + " / " + filepath.Base(paths.CSV) + " / " + filepath.Base(paths.XLSX) + " / " + filepath.Base(paths.HTML) + " / " + filepath.Base(paths.JSON)})
 			}
 
 			// Build the on-screen shortlist (tunnel-ready, best score first).

@@ -15,12 +15,13 @@ import (
 
 // Options configures a resolver scan.
 type Options struct {
-	TargetDomain string        // A-record integrity domain (default "google.com")
-	TxtDomain    string        // TXT passthrough domain (default = TargetDomain)
-	Timeout      time.Duration // per-probe timeout (default 3s)
-	Ports        []int         // custom ports; empty => 53(UDP/TCP) + 853(DoT) + 443(DoH)
-	Protocol     string        // "udp" | "tcp" | "both" | "all" (default "all" = incl DoT/DoH)
-	Concurrency  int           // resolver worker pool size (default 64)
+	TargetDomain  string        // A-record integrity domain (default "google.com")
+	TxtDomain     string        // TXT passthrough domain (default = TargetDomain)
+	Timeout       time.Duration // per-probe timeout (default 3s)
+	Ports         []int         // custom ports; empty => 53(UDP/TCP) + 853(DoT) + 443(DoH)
+	Protocol      string        // "udp" | "tcp" | "both" | "all" (default "all" = incl DoT/DoH)
+	Concurrency   int           // resolver worker pool size (default 64)
+	TruthProvider string        // reference resolver for the truth table: "google" (default) | "cloudflare"
 
 	// ScoreThreshold: resolvers with a compatibility Score >= this are considered
 	// "qualified" (range-scout parity). 0 keeps everything.
@@ -49,30 +50,38 @@ func (o Options) withDefaults() Options {
 	default:
 		o.Protocol = "all"
 	}
+	switch strings.ToLower(strings.TrimSpace(o.TruthProvider)) {
+	case ReferenceGoogle, ReferenceCloudflare, ReferenceQuad9:
+		o.TruthProvider = strings.ToLower(strings.TrimSpace(o.TruthProvider))
+	default:
+		o.TruthProvider = ReferenceGoogle
+	}
 	return o
 }
 
 // ResolverResult is the aggregated verdict for one resolver IP.
 type ResolverResult struct {
-	IP          string
-	Probes      []DnsProbeResult // per-protocol A-record probes
-	TxtProbe    DnsProbeResult   // TXT passthrough probe
-	Responded   bool
-	UDPOK       bool          // responded over UDP
-	TCPOK       bool          // responded over TCP
-	RA          bool          // open recursion advertised
-	EDNS        bool          // EDNS0 large-payload usable
-	Poisoned    bool          // any A answer mismatched the truth table
-	TxtPass     bool          // TXT rdata returned intact
-	Transparent bool          // transparent DNS proxy / lying resolver detected
-	Score       int           // SlipNet-style compatibility score 0-6
-	TunnelReady bool          // RA + EDNS + TXT passthrough
-	TunnelReason string       // why ready / what's missing
-	BestLatency time.Duration // fastest responding probe
-	Nearby      bool          // discovered via /24 nearby-expansion pass
-	Status      string        // overall verdict: valid | poison | hijack | invalid
-	NSCount     int           // authority (NS) records seen across probes
-	ARCount     int           // additional records seen across probes
+	IP           string
+	Probes       []DnsProbeResult // per-protocol A-record probes
+	TxtProbe     DnsProbeResult   // TXT passthrough probe
+	Responded    bool
+	UDPOK        bool          // responded over UDP
+	TCPOK        bool          // responded over TCP
+	RA           bool          // open recursion advertised
+	EDNS         bool          // EDNS0 large-payload usable
+	Poisoned     bool          // any A answer mismatched the truth table
+	TxtPass      bool          // TXT rdata returned intact
+	Transparent  bool          // transparent DNS proxy / lying resolver detected
+	Score        int           // SlipNet-style compatibility score 0-6
+	TunnelReady  bool          // RA + EDNS + TXT passthrough
+	TunnelReason string        // why ready / what's missing
+	BestLatency  time.Duration // fastest responding probe
+	Nearby       bool          // discovered via /24 nearby-expansion pass
+	Status       string        // overall verdict: valid | poison | hijack | invalid
+	NSCount      int           // authority (NS) records seen across probes
+	ARCount      int           // additional records seen across probes
+	PoisonIP     string        // the mismatched A answer(s) that tripped poisoning
+	HijackIP     string        // the forged A answer returned for a nonexistent name
 }
 
 // Resolver status values (one per resolver, most-severe wins).
@@ -143,6 +152,7 @@ func ScanResolvers(ctx context.Context, ips []string, opts Options, progress fun
 	opts = opts.withDefaults()
 
 	truth := NewTruthTable(opts.TargetDomain)
+	truth.Prefer = opts.TruthProvider
 	_ = truth.FetchTruth() // best-effort; Verify() treats an empty table as clean
 
 	dialer := &net.Dialer{Timeout: opts.Timeout}
@@ -232,7 +242,14 @@ func ScanResolver(ctx context.Context, ip string, opts Options, truth *TruthTabl
 
 	best := time.Duration(0)
 	for _, p := range res.Probes {
-		if p.Responded {
+		// Responsiveness = a well-formed DNS reply came back (HeaderOK means QR=1
+		// with a matching transaction ID). A resolver that answers REFUSED /
+		// SERVFAIL / NXDOMAIN, or returns no A record for the probe domain, is
+		// still a live, reachable server — only a total lack of reply (timeout /
+		// unreachable) is "invalid". Many tunnel-capable resolvers REFUSE a direct
+		// google.com query from a non-subscriber IP yet still forward the tunnel
+		// zone, so gating on a clean A answer wrongly discarded them.
+		if p.HeaderOK {
 			res.Responded = true
 			if strings.HasPrefix(p.Protocol, "UDP") {
 				res.UDPOK = true
@@ -240,26 +257,27 @@ func ScanResolver(ctx context.Context, ip string, opts Options, truth *TruthTabl
 			if strings.HasPrefix(p.Protocol, "TCP") {
 				res.TCPOK = true
 			}
-			if p.HeaderOK && p.Header.RA {
+			if p.Header.RA {
 				res.RA = true
 			}
-			if p.EDNS {
-				res.EDNS = true
-			}
-			if best == 0 || p.TTFB < best {
+			if p.TTFB > 0 && (best == 0 || p.TTFB < best) {
 				best = p.TTFB
 			}
-			if p.HeaderOK {
-				if int(p.Header.NSCount) > res.NSCount {
-					res.NSCount = int(p.Header.NSCount)
-				}
-				if int(p.Header.ARCount) > res.ARCount {
-					res.ARCount = int(p.Header.ARCount)
-				}
+			if int(p.Header.NSCount) > res.NSCount {
+				res.NSCount = int(p.Header.NSCount)
 			}
+			if int(p.Header.ARCount) > res.ARCount {
+				res.ARCount = int(p.Header.ARCount)
+			}
+		}
+		if p.EDNS {
+			res.EDNS = true
 		}
 		if p.IsPoisoned {
 			res.Poisoned = true
+			if res.PoisonIP == "" && len(p.AnswerIPs) > 0 {
+				res.PoisonIP = strings.Join(p.AnswerIPs, ",")
+			}
 		}
 	}
 	res.BestLatency = best
@@ -267,11 +285,11 @@ func ScanResolver(ctx context.Context, ip string, opts Options, truth *TruthTabl
 	// Transparent-proxy / lying-resolver detection: a random, guaranteed-
 	// nonexistent name must return NXDOMAIN. If the resolver hands back an A
 	// record for it, it is intercepting/forging answers (a transparent DNS
-	// proxy), which makes it unreliable for tunneling.
+	// proxy / NXDOMAIN-redirect), which makes it unreliable for tunneling. Two
+	// independent bogus names are tried because a single UDP probe can be lost
+	// or rate-limited, which would silently miss a hijacker (false negative).
 	if res.Responded {
-		bogus := randomLabel() + ".invalid-" + randomLabel() + ".com"
-		tp := ProbeUDP(ctx, ip, bogus, nil, opts.Timeout, dialer, txtPort)
-		res.Transparent = tp.Responded && len(tp.AnswerIPs) > 0
+		res.Transparent, res.HijackIP = detectHijack(ctx, ip, opts.Timeout, dialer, txtPort)
 	}
 
 	res.Score = computeScore(res)
@@ -359,6 +377,22 @@ func classifyTunnel(r ResolverResult) (bool, string) {
 		return true, "open-recursor+edns0+txt-passthrough"
 	}
 	return false, strings.Join(missing, ",")
+}
+
+// detectHijack probes the resolver with independent, guaranteed-nonexistent
+// names. A correct resolver answers NXDOMAIN (no A record); a transparent proxy,
+// captive portal, or NXDOMAIN-redirect box forges an A record instead. It tries
+// two names so a single dropped/rate-limited UDP datagram does not mask a
+// hijacker, and returns the first forged IP for the report.
+func detectHijack(ctx context.Context, ip string, timeout time.Duration, dialer *net.Dialer, port int) (bool, string) {
+	for i := 0; i < 2; i++ {
+		bogus := "nx" + randomLabel() + "." + randomLabel() + ".com"
+		tp := ProbeUDP(ctx, ip, bogus, nil, timeout, dialer, port)
+		if tp.Responded && len(tp.AnswerIPs) > 0 {
+			return true, strings.Join(tp.AnswerIPs, ",")
+		}
+	}
+	return false, ""
 }
 
 // randomLabel returns a short random hex label for cache-busting / bogus names.

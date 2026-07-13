@@ -18,11 +18,42 @@ type trustedDoHProvider struct {
 	URL  string // %s is replaced with the domain
 }
 
-// trustedProviders is the ordered fallback list of DoH providers.
+// trustedProviders is the ordered fallback list of DoH providers used to build
+// the truth table. Google Public DNS is the default reference (widely reachable
+// and geo-accurate); Cloudflare and Quad9 are fallbacks.
 var trustedProviders = []trustedDoHProvider{
-	{Name: "Cloudflare", URL: "https://cloudflare-dns.com/dns-query?name=%s&type=A"},
 	{Name: "Google", URL: "https://dns.google/dns-query?name=%s&type=A"},
+	{Name: "Cloudflare", URL: "https://cloudflare-dns.com/dns-query?name=%s&type=A"},
 	{Name: "Quad9", URL: "https://dns.quad9.net/dns-query?name=%s&type=A"},
+}
+
+// Reference provider identifiers selectable by the operator.
+const (
+	ReferenceGoogle     = "google"
+	ReferenceCloudflare = "cloudflare"
+	ReferenceQuad9      = "quad9"
+)
+
+// orderedProviders returns the provider list with the preferred reference tried
+// first; the rest stay as fallbacks so a blocked primary still yields a truth
+// table.
+func orderedProviders(prefer string) []trustedDoHProvider {
+	prefer = strings.ToLower(strings.TrimSpace(prefer))
+	if prefer == "" {
+		return trustedProviders
+	}
+	out := make([]trustedDoHProvider, 0, len(trustedProviders))
+	for _, p := range trustedProviders {
+		if strings.EqualFold(p.Name, prefer) {
+			out = append(out, p)
+		}
+	}
+	for _, p := range trustedProviders {
+		if !strings.EqualFold(p.Name, prefer) {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // TruthTable holds the verified "correct" IPs for a target domain. If a resolver
@@ -31,12 +62,14 @@ type TruthTable struct {
 	Domain   string
 	TruthIPs map[string]bool
 	Provider string
+	Prefer   string // preferred reference provider (ReferenceGoogle / ReferenceCloudflare)
 	mu       sync.RWMutex
 }
 
-// NewTruthTable creates an empty truth table for a domain.
+// NewTruthTable creates an empty truth table for a domain, defaulting to Google
+// Public DNS as the reference resolver.
 func NewTruthTable(domain string) *TruthTable {
-	return &TruthTable{Domain: domain, TruthIPs: make(map[string]bool)}
+	return &TruthTable{Domain: domain, TruthIPs: make(map[string]bool), Prefer: ReferenceGoogle}
 }
 
 // FetchTruth populates the table from trusted DoH providers, falling back to
@@ -53,7 +86,7 @@ func (t *TruthTable) FetchTruth() error {
 		},
 	}
 
-	for _, provider := range trustedProviders {
+	for _, provider := range orderedProviders(t.Prefer) {
 		req, err := http.NewRequest("GET", fmt.Sprintf(provider.URL, t.Domain), nil)
 		if err != nil {
 			continue
@@ -117,6 +150,21 @@ var knownGoodV4Prefixes = map[string][]string{
 	"facebook.com": {"157.240", "31.13", "179.60", "185.60", "129.134"},
 }
 
+// knownFilterIPs are documented DNS block-page / sinkhole targets a censoring
+// resolver injects instead of the real answer. The 10.10.34.x set is Iran's
+// national filternet redirect (also caught by the bogon rule, listed here for
+// clarity); 185.55.225.25 / 185.55.226.26 are its public block-page servers,
+// which are NOT bogons and would otherwise slip through. Any of these in an
+// answer is an unambiguous poisoning signal.
+var knownFilterIPs = map[string]bool{
+	"10.10.34.34":   true,
+	"10.10.34.35":   true,
+	"10.10.34.36":   true,
+	"10.10.34.1":    true,
+	"185.55.225.25": true,
+	"185.55.226.26": true,
+}
+
 // Verify reports whether an A-record answer set looks honest (clean). It is
 // deliberately lenient about legitimate IP rotation but strict about the two
 // unambiguous poisoning signatures used by DNS censors: sinkhole/bogon answers
@@ -135,9 +183,10 @@ func (t *TruthTable) Verify(ips []string) bool {
 	defer t.mu.RUnlock()
 
 	// A private/reserved answer for a public domain is the classic sinkhole
-	// poisoning signature — always dirty, whatever the truth table holds.
+	// poisoning signature, as is any documented block-page IP — always dirty,
+	// whatever the truth table holds.
 	for _, ip := range ips {
-		if isBogonIP(ip) {
+		if isBogonIP(ip) || knownFilterIPs[strings.TrimSpace(ip)] {
 			return false
 		}
 	}

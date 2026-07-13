@@ -202,6 +202,12 @@ const (
 
 const maxAllowedConcurrency = 10000
 
+// pasteKeyGap is the inter-key window below which a keystroke-injected paste is
+// assumed (a terminal without bracketed paste replays a paste far faster than a
+// human types). Keys/Enters closer together than this are treated as pasted
+// content, not manual input. Human typing is essentially never sub-25ms/key.
+const pasteKeyGap = 25 * time.Millisecond
+
 // ------------------------------------------------------------
 //  Data types
 // ------------------------------------------------------------
@@ -388,6 +394,10 @@ type tuiModel struct {
 	pasteConfirmAt time.Time
 	// lastEnterTime: track when last Enter was pressed to detect paste-generated Enters
 	lastEnterTime time.Time
+	// lastKeyAt: timestamp of the previous key on the target-input screen, used to
+	// tell a human Enter (submit) from the microsecond-spaced Enters a terminal
+	// injects for the newlines of a keystroke-delivered paste.
+	lastKeyAt time.Time
 	// pasteBuffer accumulates terminal bracketed-paste content (incl. newlines)
 	// so multi-line target pastes work without relying on an OS clipboard tool
 	// (xclip/xsel), which many Linux/Termux/SSH users do not have installed.
@@ -404,6 +414,12 @@ type tuiModel struct {
 	// dnsConcurrency is the resolver worker-pool size chosen on the DNS worker
 	// screen (0 => defaultDNSWorkers).
 	dnsConcurrency int
+	// dnsTestNearby toggles /24 nearby-IP expansion around tunnel-ready hits,
+	// chosen on the DNS "Test Nearby IPs" screen (default off).
+	dnsTestNearby bool
+	// dnsReference is the trusted reference resolver used to build the truth
+	// table ("google" default | "cloudflare"), chosen on the DNS reference screen.
+	dnsReference string
 }
 
 // ------------------------------------------------------------
@@ -790,8 +806,12 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m, screenCmd = m.handleInspectIPScreen(msg)
 	case screenDNSPorts:
 		m, screenCmd = m.handleDNSPortsScreen(msg)
+	case screenDNSReference:
+		m, screenCmd = m.handleDNSReferenceScreen(msg)
 	case screenDNSWorkers:
 		m, screenCmd = m.handleDNSWorkersScreen(msg)
+	case screenDNSNearby:
+		m, screenCmd = m.handleDNSNearbyScreen(msg)
 	case screenScanResults:
 		m, screenCmd = m.handleScanResultsScreen(msg)
 	}
@@ -857,8 +877,12 @@ func (m tuiModel) View() string {
 		body = m.viewSimpleInput(w, h, "Inspect IP", "Enter IP address")
 	case screenDNSPorts:
 		body = m.viewDNSPorts(w, h)
+	case screenDNSReference:
+		body = m.viewDNSReference(w, h)
 	case screenDNSWorkers:
 		body = m.viewDNSWorkers(w, h)
+	case screenDNSNearby:
+		body = m.viewDNSNearby(w, h)
 	default:
 		body = m.viewMenu(w, h)
 	}
@@ -2299,52 +2323,36 @@ func (m tuiModel) handleTypeTargetsScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
 		return m, nil
 	}
 	if ok && k.String() == "enter" {
+		now := time.Now()
+		rapid := !m.lastKeyAt.IsZero() && now.Sub(m.lastKeyAt) < pasteKeyGap
+		m.lastKeyAt = now
+
+		// Terminals without bracketed paste deliver a paste as raw keystrokes, with
+		// every newline arriving as an Enter microseconds after the previous key. A
+		// human submit-Enter comes far later. So an Enter that lands within pasteKeyGap
+		// of the last key is a pasted line break: fold it into the accumulator (never
+		// submit) so the whole list is captured intact and the following menus are not
+		// auto-advanced by the burst. Only a settled Enter submits.
+		if rapid && strings.TrimSpace(m.pasteBuffer) == "" {
+			m.pasteBuffer = m.ti.Value() // seed with the first line the terminal echoed
+		}
+		if rapid {
+			m.pasteBuffer += "\n"
+			m.setToast(sInfo.Render("Pasting… press Enter when done"), 2*time.Second)
+			return m, nil
+		}
+
 		raw := m.ti.Value()
-		havePaste := strings.TrimSpace(m.pasteBuffer) != ""
-		if havePaste {
-			// Bracketed paste already captured the full multi-line content, so
-			// submit it directly — no rapid-Enter filtering, confirm step, or
-			// OS-clipboard dependency needed.
+		if strings.TrimSpace(m.pasteBuffer) != "" {
+			// Full multi-line content captured via bracketed paste, Ctrl+V, or the
+			// keystroke-fold path above.
 			raw = m.pasteBuffer
-		} else if m.scanConfig.Mode == "paste" {
-			// Fallback path for terminals without bracketed paste (newlines arrive
-			// as Enter keystrokes). Filter rapid-fire Enters from pasted newlines.
-			now := time.Now()
-			if !m.lastEnterTime.IsZero() && now.Sub(m.lastEnterTime) < 50*time.Millisecond {
-				m.lastEnterTime = now
-				m.ti, _ = m.ti.Update(msg)
-				return m, nil
-			}
-			m.lastEnterTime = now
-
-			// Require a confirmation Enter to avoid instant submission when pasting.
-			if !m.pasteConfirm {
-				m.pasteConfirm = true
-				m.pasteConfirmAt = time.Now()
-				m.setToast(sInfo.Render("Press Enter again to proceed with review"), 2*time.Second)
-				return m, nil
-			}
-			if time.Since(m.pasteConfirmAt) > 10*time.Second {
-				m.pasteConfirmAt = time.Now()
-				m.setToast(sInfo.Render("Press Enter again to proceed with review"), 2*time.Second)
-				return m, nil
-			}
-			m.pasteConfirm = false
-			// Note: the OS clipboard is intentionally NOT read here. Doing so
-			// injected whatever was already on the clipboard (e.g. IPs copied
-			// earlier) even when the user pasted nothing. Real pastes are captured
-			// via bracketed paste (m.pasteBuffer) above.
-
-			// Last resort: pull from the OS clipboard (works on Windows/macOS; on
-			// Linux requires xclip/xsel, which is why bracketed paste is preferred).
-			if clipText := readClipboardText(); clipText != "" {
-				raw = clipText
-			}
 		}
 
 		raw = strings.TrimSpace(raw)
 		m.pasteBuffer = ""
 		m.pasteConfirm = false
+		m.lastKeyAt = time.Time{}
 		if raw == "" {
 			m.goBack()
 			return m, nil
@@ -2371,6 +2379,25 @@ func (m tuiModel) handleTypeTargetsScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
 		m.pushScreen(screenReviewTargets)
 		m.ti.Blur()
 		return m, nil
+	}
+
+	// Non-Enter key on the target screen. Track timing so the Enter handler can tell
+	// a paste burst from typing, and mirror pasted runes into the line-preserving
+	// accumulator once a paste is in progress.
+	if ok {
+		now := time.Now()
+		settled := m.lastKeyAt.IsZero() || now.Sub(m.lastKeyAt) >= pasteKeyGap
+		m.lastKeyAt = now
+		if strings.TrimSpace(m.pasteBuffer) != "" {
+			if settled {
+				// User resumed manual editing after a paste: flatten what we captured
+				// back into the visible field and continue with the normal ti flow.
+				m.ti.SetValue(strings.Join(strings.Fields(strings.ReplaceAll(m.pasteBuffer, "\n", " ")), " "))
+				m.pasteBuffer = ""
+			} else if k.Type == tea.KeyRunes {
+				m.pasteBuffer += string(k.Runes)
+			}
+		}
 	}
 	m.ti, _ = m.ti.Update(msg)
 	return m, nil

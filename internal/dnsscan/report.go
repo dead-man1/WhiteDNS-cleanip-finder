@@ -1,6 +1,8 @@
 package dnsscan
 
 import (
+	"archive/zip"
+	"bytes"
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
@@ -20,6 +22,7 @@ type ReportPaths struct {
 	TunnelReady string // tunnel-ready shortlist
 	CSV         string
 	HTML        string // colour-coded per-status table (opens in browser/Excel)
+	XLSX        string // real spreadsheet with per-status cell fills
 	JSON        string
 }
 
@@ -69,6 +72,10 @@ func WriteReports(dir string, results []ResolverResult) (ReportPaths, error) {
 	if err := writeHTML(paths.HTML, sorted); err != nil {
 		return paths, err
 	}
+	paths.XLSX = filepath.Join(dir, fmt.Sprintf("resolvers_%s.xlsx", ts))
+	if err := writeXLSX(paths.XLSX, sorted); err != nil {
+		return paths, err
+	}
 	paths.JSON = filepath.Join(dir, fmt.Sprintf("resolvers_%s.json", ts))
 	if err := writeJSON(paths.JSON, sorted); err != nil {
 		return paths, err
@@ -90,6 +97,12 @@ func writeFullReport(path string, results []ResolverResult) error {
 			r.IP, strings.ToUpper(r.Status), r.Score, ynb(r.TunnelReady), r.Poisoned, r.Transparent, r.BestLatency.Milliseconds())
 		fmt.Fprintf(&b, "    RA=%v EDNS0=%v TXT-pass=%v UDP=%v TCP=%v NS-records=%d AR-records=%d reason=%s\n",
 			r.RA, r.EDNS, r.TxtPass, r.UDPOK, r.TCPOK, r.NSCount, r.ARCount, r.TunnelReason)
+		if r.PoisonIP != "" {
+			fmt.Fprintf(&b, "    POISON: %s answered with off-truth IP(s) -> %s\n", r.IP, r.PoisonIP)
+		}
+		if r.HijackIP != "" {
+			fmt.Fprintf(&b, "    HIJACK forged A for nonexistent name -> %s\n", r.HijackIP)
+		}
 		for _, hd := range r.HeaderDump() {
 			b.WriteString("    " + hd + "\n")
 		}
@@ -126,7 +139,7 @@ func writeCSV(path string, results []ResolverResult) error {
 	// status + color make the per-state verdict explicit so spreadsheets can
 	// conditional-format it (poison=purple, hijack=yellow, valid=green,
 	// invalid=red); resolvers_*.html renders those colours directly.
-	_ = w.Write([]string{"ip", "status", "color", "score", "responded", "udp", "tcp", "ra", "edns", "txt_pass", "ns_records", "ar_records", "poisoned", "hijacked", "tunnel_ready", "latency_ms", "nearby", "reason"})
+	_ = w.Write([]string{"ip", "status", "color", "score", "responded", "udp", "tcp", "ra", "edns", "txt_pass", "ns_records", "ar_records", "poisoned", "poison_ip", "hijacked", "hijack_ip", "tunnel_ready", "latency_ms", "nearby", "reason"})
 	for _, r := range results {
 		_ = w.Write([]string{
 			r.IP,
@@ -142,7 +155,9 @@ func writeCSV(path string, results []ResolverResult) error {
 			strconv.Itoa(r.NSCount),
 			strconv.Itoa(r.ARCount),
 			strconv.FormatBool(r.Poisoned),
+			r.PoisonIP,
 			strconv.FormatBool(r.Transparent),
+			r.HijackIP,
 			strconv.FormatBool(r.TunnelReady),
 			strconv.FormatInt(r.BestLatency.Milliseconds(), 10),
 			strconv.FormatBool(r.Nearby),
@@ -183,8 +198,9 @@ func writeHTML(path string, results []ResolverResult) error {
 		htmlStatusFill[StatusValid], c[StatusValid], htmlStatusFill[StatusPoison], c[StatusPoison],
 		htmlStatusFill[StatusHijack], c[StatusHijack], htmlStatusFill[StatusInvalid], c[StatusInvalid])
 	b.WriteString("<table><tr><th>IP</th><th>Status</th><th>Score</th><th>RA</th><th>EDNS0</th>" +
-		"<th>TXT-pass</th><th>UDP</th><th>TCP</th><th>NS</th><th>AR</th><th>Poison</th><th>Hijack</th>" +
-		"<th>Tunnel</th><th>ms</th><th>Reason</th><th>Headers (qr/aa/tc/rd/ra rcode qd/an/ns/ar)</th></tr>\n")
+		"<th>TXT-pass</th><th>UDP</th><th>TCP</th><th>NS</th><th>AR</th><th>Poison</th><th>Poison IP</th>" +
+		"<th>Hijack</th><th>Hijack IP</th><th>Tunnel</th><th>ms</th><th>Reason</th>" +
+		"<th>Headers (qr/aa/tc/rd/ra rcode qd/an/ns/ar)</th></tr>\n")
 	esc := html.EscapeString
 	for _, r := range results {
 		fill := htmlStatusFill[r.Status]
@@ -193,10 +209,11 @@ func writeHTML(path string, results []ResolverResult) error {
 		}
 		fmt.Fprintf(&b, "<tr style=\"background:%s\"><td><code>%s</code></td><td><b>%s</b></td>"+
 			"<td>%d/6</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%d</td><td>%d</td>"+
-			"<td>%s</td><td>%s</td><td>%s</td><td>%d</td><td>%s</td><td><code>%s</code></td></tr>\n",
+			"<td>%s</td><td><code>%s</code></td><td>%s</td><td><code>%s</code></td><td>%s</td><td>%d</td><td>%s</td><td><code>%s</code></td></tr>\n",
 			fill, esc(r.IP), esc(strings.ToUpper(r.Status)), r.Score,
 			ynb(r.RA), ynb(r.EDNS), ynb(r.TxtPass), ynb(r.UDPOK), ynb(r.TCPOK), r.NSCount, r.ARCount,
-			ynb(r.Poisoned), ynb(r.Transparent), ynb(r.TunnelReady), r.BestLatency.Milliseconds(),
+			ynb(r.Poisoned), esc(r.PoisonIP), ynb(r.Transparent), esc(r.HijackIP),
+			ynb(r.TunnelReady), r.BestLatency.Milliseconds(),
 			esc(r.TunnelReason), esc(strings.Join(r.HeaderDump(), " ⏐ ")))
 	}
 	b.WriteString("</table>\n")
@@ -218,6 +235,8 @@ type jsonResolver struct {
 	NSCount     int      `json:"ns_records"`
 	ARCount     int      `json:"ar_records"`
 	Poisoned    bool     `json:"poisoned"`
+	PoisonIP    string   `json:"poison_ip,omitempty"`
+	HijackIP    string   `json:"hijack_ip,omitempty"`
 	Transparent bool     `json:"transparent_proxy"`
 	TunnelReady bool     `json:"tunnel_ready"`
 	LatencyMs   int64    `json:"latency_ms"`
@@ -233,7 +252,7 @@ func writeJSON(path string, results []ResolverResult) error {
 			IP: r.IP, Status: r.Status, Color: StatusColor(r.Status), Score: r.Score,
 			Responded: r.Responded, UDP: r.UDPOK, TCP: r.TCPOK,
 			RA: r.RA, EDNS: r.EDNS, TxtPass: r.TxtPass, NSCount: r.NSCount, ARCount: r.ARCount,
-			Poisoned: r.Poisoned,
+			Poisoned: r.Poisoned, PoisonIP: r.PoisonIP, HijackIP: r.HijackIP,
 			Transparent: r.Transparent, TunnelReady: r.TunnelReady,
 			LatencyMs: r.BestLatency.Milliseconds(), Nearby: r.Nearby, Reason: r.TunnelReason,
 			Headers: r.HeaderDump(),
@@ -252,3 +271,147 @@ func ynb(v bool) string {
 	}
 	return "N"
 }
+
+// ── Colour-filled XLSX report ────────────────────────────────────────────────
+//
+// CSV has no concept of cell colour, so to deliver a genuinely colour-coded
+// spreadsheet we emit a minimal (stdlib-only) OOXML .xlsx whose rows are filled
+// by resolver status: poison=purple, hijack=yellow, valid=green, invalid=red.
+// It opens in Excel/LibreOffice/Google Sheets with the fills intact.
+
+// xlsxStatusStyle maps a status to the cellXfs style index defined in xlsxStyles.
+func xlsxStatusStyle(status string) int {
+	switch status {
+	case StatusValid:
+		return 2 // green
+	case StatusPoison:
+		return 3 // purple
+	case StatusHijack:
+		return 4 // yellow
+	default:
+		return 5 // red (invalid)
+	}
+}
+
+func xlsxCol(i int) string { return string(rune('A' + i)) }
+
+func xlsxStr(b *bytes.Buffer, col int, row, style int, val string) {
+	fmt.Fprintf(b, `<c r="%s%d" s="%d" t="inlineStr"><is><t xml:space="preserve">%s</t></is></c>`,
+		xlsxCol(col), row, style, html.EscapeString(val))
+}
+
+func xlsxNum(b *bytes.Buffer, col int, row, style int, n int64) {
+	fmt.Fprintf(b, `<c r="%s%d" s="%d"><v>%d</v></c>`, xlsxCol(col), row, style, n)
+}
+
+func writeXLSX(path string, results []ResolverResult) error {
+	headers := []string{"IP", "Status", "Score", "RA", "EDNS0", "TXT-pass", "UDP", "TCP",
+		"NS", "AR", "Poison", "Poison IP", "Hijack", "Hijack IP", "Tunnel", "ms", "Reason"}
+
+	var sheet bytes.Buffer
+	sheet.WriteString(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>`)
+	sheet.WriteString(`<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>`)
+	sheet.WriteString(`<row r="1">`)
+	for c, h := range headers {
+		xlsxStr(&sheet, c, 1, 1, h) // header style
+	}
+	sheet.WriteString(`</row>`)
+	for i, r := range results {
+		row := i + 2
+		s := xlsxStatusStyle(r.Status)
+		fmt.Fprintf(&sheet, `<row r="%d">`, row)
+		xlsxStr(&sheet, 0, row, s, r.IP)
+		xlsxStr(&sheet, 1, row, s, strings.ToUpper(r.Status))
+		xlsxNum(&sheet, 2, row, s, int64(r.Score))
+		xlsxStr(&sheet, 3, row, s, ynb(r.RA))
+		xlsxStr(&sheet, 4, row, s, ynb(r.EDNS))
+		xlsxStr(&sheet, 5, row, s, ynb(r.TxtPass))
+		xlsxStr(&sheet, 6, row, s, ynb(r.UDPOK))
+		xlsxStr(&sheet, 7, row, s, ynb(r.TCPOK))
+		xlsxNum(&sheet, 8, row, s, int64(r.NSCount))
+		xlsxNum(&sheet, 9, row, s, int64(r.ARCount))
+		xlsxStr(&sheet, 10, row, s, ynb(r.Poisoned))
+		xlsxStr(&sheet, 11, row, s, r.PoisonIP)
+		xlsxStr(&sheet, 12, row, s, ynb(r.Transparent))
+		xlsxStr(&sheet, 13, row, s, r.HijackIP)
+		xlsxStr(&sheet, 14, row, s, ynb(r.TunnelReady))
+		xlsxNum(&sheet, 15, row, s, r.BestLatency.Milliseconds())
+		xlsxStr(&sheet, 16, row, s, r.TunnelReason)
+		sheet.WriteString(`</row>`)
+	}
+	sheet.WriteString(`</sheetData></worksheet>`)
+
+	parts := []struct{ name, body string }{
+		{"[Content_Types].xml", xlsxContentTypes},
+		{"_rels/.rels", xlsxRootRels},
+		{"xl/workbook.xml", xlsxWorkbook},
+		{"xl/_rels/workbook.xml.rels", xlsxWorkbookRels},
+		{"xl/styles.xml", xlsxStyles},
+		{"xl/worksheets/sheet1.xml", sheet.String()},
+	}
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	for _, p := range parts {
+		w, err := zw.Create(p.name)
+		if err != nil {
+			return err
+		}
+		if _, err := w.Write([]byte(p.body)); err != nil {
+			return err
+		}
+	}
+	if err := zw.Close(); err != nil {
+		return err
+	}
+	return os.WriteFile(path, buf.Bytes(), 0o644)
+}
+
+const xlsxContentTypes = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
+	`<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">` +
+	`<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>` +
+	`<Default Extension="xml" ContentType="application/xml"/>` +
+	`<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>` +
+	`<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>` +
+	`<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>` +
+	`</Types>`
+
+const xlsxRootRels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
+	`<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">` +
+	`<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>` +
+	`</Relationships>`
+
+const xlsxWorkbook = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
+	`<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">` +
+	`<sheets><sheet name="Resolvers" sheetId="1" r:id="rId1"/></sheets></workbook>`
+
+const xlsxWorkbookRels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
+	`<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">` +
+	`<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>` +
+	`<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>` +
+	`</Relationships>`
+
+// xlsxStyles: fonts, four status fills + header fill, and the cellXfs indices
+// (0 default, 1 header, 2 green, 3 purple, 4 yellow, 5 red) referenced by cells.
+const xlsxStyles = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
+	`<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">` +
+	`<fonts count="2"><font><sz val="11"/><name val="Calibri"/></font>` +
+	`<font><b/><color rgb="FFFFFFFF"/><sz val="11"/><name val="Calibri"/></font></fonts>` +
+	`<fills count="7">` +
+	`<fill><patternFill patternType="none"/></fill>` +
+	`<fill><patternFill patternType="gray125"/></fill>` +
+	`<fill><patternFill patternType="solid"><fgColor rgb="FF333333"/></patternFill></fill>` +
+	`<fill><patternFill patternType="solid"><fgColor rgb="FFA5D6A7"/></patternFill></fill>` +
+	`<fill><patternFill patternType="solid"><fgColor rgb="FFB39DDB"/></patternFill></fill>` +
+	`<fill><patternFill patternType="solid"><fgColor rgb="FFFFF59D"/></patternFill></fill>` +
+	`<fill><patternFill patternType="solid"><fgColor rgb="FFEF9A9A"/></patternFill></fill>` +
+	`</fills>` +
+	`<borders count="1"><border/></borders>` +
+	`<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>` +
+	`<cellXfs count="6">` +
+	`<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>` +
+	`<xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1"/>` +
+	`<xf numFmtId="0" fontId="0" fillId="3" borderId="0" xfId="0" applyFill="1"/>` +
+	`<xf numFmtId="0" fontId="0" fillId="4" borderId="0" xfId="0" applyFill="1"/>` +
+	`<xf numFmtId="0" fontId="0" fillId="5" borderId="0" xfId="0" applyFill="1"/>` +
+	`<xf numFmtId="0" fontId="0" fillId="6" borderId="0" xfId="0" applyFill="1"/>` +
+	`</cellXfs></styleSheet>`
