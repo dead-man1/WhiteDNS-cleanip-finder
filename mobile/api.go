@@ -17,6 +17,7 @@ import (
 
 	"whitedns-go/internal/asn"
 	"whitedns-go/internal/asnexport"
+	"whitedns-go/internal/dnsscan"
 	"whitedns-go/internal/scanner"
 	"whitedns-go/internal/tlsprobe"
 )
@@ -1148,6 +1149,242 @@ func StartSpeedRankScan(dataDir string, cfg *ScanConfig, l ScanListener) *ScanHa
 		// A stop is not an error: every ranked line was already written to disk
 		// above, so return the saved path so the user keeps their partial results.
 		l.OnDone(rf.close(), "")
+	}()
+	return h
+}
+
+// ── DNS resolver / tunnel scan ───────────────────────────────────────────────
+
+// StartDNSScan probes each resolver IP for open recursion, EDNS0 support, TXT
+// passthrough, and answer-integrity (poisoning/hijack detection), then reports
+// tunnel-readiness — mirrors the desktop TUI's "DNS Resolver / Tunnel Scan".
+//
+// Targets are streamed to disk and scanned back in bounded chunks exactly like
+// StartIPScan, so a large CIDR/ASN of resolvers can't OOM the device. Lite mode
+// additionally forces "Test Nearby IPs" off: every tunnel-ready hit would
+// otherwise expand into a 256-address /24 rescan, which is unsafe to trigger
+// unattended on weak hardware.
+func StartDNSScan(dataDir string, cfg *ScanConfig, l ScanListener) *ScanHandle {
+	if cfg == nil {
+		cfg = &ScanConfig{}
+	}
+	h := newScanHandle(nil)
+
+	liteMode := effectiveLiteMode(cfg)
+	targets := splitTargets(cfg.Targets)
+	ports := parsePortsOrEmpty(cfg.Ports)
+	conc := concurrencyOrDefault(cfg.Concurrency, 64)
+	if liteMode && conc > liteMaxConcurrency {
+		conc = liteMaxConcurrency
+	}
+	timeout := timeoutOrDefault(cfg.TimeoutMs, 3*time.Second, cfg.LowBandwidth)
+
+	protocol := strings.ToLower(strings.TrimSpace(cfg.DNSProtocol))
+	switch protocol {
+	case "udp", "tcp", "both", "all":
+	default:
+		protocol = "both"
+	}
+	reference := strings.ToLower(strings.TrimSpace(cfg.DNSReference))
+	switch reference {
+	case dnsscan.ReferenceGoogle, dnsscan.ReferenceCloudflare, dnsscan.ReferenceQuad9:
+	default:
+		reference = dnsscan.ReferenceGoogle
+	}
+	testNearby := cfg.DNSTestNearby && !liteMode
+
+	opts := dnsscan.Options{
+		TargetDomain:  "google.com",
+		Timeout:       timeout,
+		Concurrency:   conc,
+		Protocol:      protocol,
+		Ports:         ports,
+		TruthProvider: reference,
+	}
+
+	chunkSize := chunkIPCount
+	if liteMode {
+		chunkSize = liteChunkIPCount
+	}
+
+	go func() {
+		if len(targets) == 0 {
+			l.OnDone("", "no resolver IPs/CIDRs selected")
+			return
+		}
+
+		dedupCap := stageDedupCap
+		if liteMode {
+			dedupCap = liteDedupCap
+		}
+		tmpPath := filepath.Join(dataDir, "tmp", fmt.Sprintf("dns-targets-%d.txt", time.Now().UnixNano()))
+		totalIPs, err := expandTargetsToFile(targets, tmpPath, dedupCap)
+		if err != nil {
+			l.OnDone("", "could not stage resolver targets: "+err.Error())
+			return
+		}
+		defer os.Remove(tmpPath)
+		if totalIPs == 0 {
+			l.OnDone("", "no resolver IPs expanded from targets")
+			return
+		}
+
+		file, err := os.Open(tmpPath)
+		if err != nil {
+			l.OnDone("", err.Error())
+			return
+		}
+		defer file.Close()
+
+		lf := openLogFile(dataDir, "dns")
+		logThrottle := newThrottle(250 * time.Millisecond)
+		resultThrottle := newThrottle(250 * time.Millisecond)
+		start := time.Now()
+		etaEst := newETATracker()
+		processedBase := 0
+		hitsTotal := 0
+		var all []dnsscan.ResolverResult
+
+		stagedMsg := fmt.Sprintf("[DNS-SCAN-START] targets=%d staged_ips=%d protocol=%s reference=%s concurrency=%d lite=%v nearby=%v",
+			len(targets), totalIPs, protocol, reference, conc, liteMode, testNearby)
+		lf.write(stagedMsg)
+		l.OnLog(stagedMsg)
+
+		// progress is invoked from a single goroutine per ScanResolvers call (see
+		// dnsscan.ScanResolvers doc), so hitsTotal/processedBase need no locking.
+		makeProgress := func(totalForETA int) func(done, tot int, r dnsscan.ResolverResult) {
+			return func(done, _ int, r dnsscan.ResolverResult) {
+				if r.TunnelReady {
+					hitsTotal++
+				}
+				if h.isStopped() {
+					return
+				}
+				status := "no-response"
+				if r.Responded {
+					status = fmt.Sprintf("resp %dms", r.BestLatency.Milliseconds())
+				}
+				line := fmt.Sprintf("%-15s %-13s score=%d/6 tunnel=%v (%s)", r.IP, status, r.Score, r.TunnelReady, r.TunnelReason)
+				lf.write(line)
+				if logThrottle.allow() {
+					l.OnLog(line)
+				}
+				if r.TunnelReady && resultThrottle.allow() {
+					l.OnResult(line)
+				}
+				doneTotal := processedBase + done
+				l.OnProgress(doneTotal, totalForETA, hitsTotal, totalForETA, r.IP, etaEst.eta(doneTotal, totalForETA))
+			}
+		}
+
+		runChunk := func(chunk []string) {
+			if len(chunk) == 0 {
+				return
+			}
+			results := dnsscan.ScanResolvers(h.ctx, chunk, opts, makeProgress(totalIPs))
+			all = append(all, results...)
+			processedBase += len(chunk)
+		}
+
+		fileScanner := bufio.NewScanner(file)
+		fileScanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+		chunk := make([]string, 0, chunkSize)
+		for fileScanner.Scan() {
+			if h.isStopped() {
+				break
+			}
+			for h.isPaused() && !h.isStopped() {
+				time.Sleep(200 * time.Millisecond)
+			}
+			line := strings.TrimSpace(fileScanner.Text())
+			if line == "" {
+				continue
+			}
+			chunk = append(chunk, line)
+			if len(chunk) >= chunkSize {
+				runChunk(chunk)
+				chunk = chunk[:0]
+				if liteMode {
+					// Reclaim the chunk's memory promptly, same as StartIPScan.
+					runtime.GC()
+					time.Sleep(300 * time.Millisecond)
+				}
+			}
+		}
+		if !h.isStopped() {
+			runChunk(chunk)
+		}
+
+		// Test Nearby IPs: expand the /24 around each tunnel-ready resolver and
+		// rescan the addresses not already tried (desktop TUI parity). Forced off
+		// in Lite mode (see doc comment above).
+		if testNearby && !h.isStopped() {
+			scanned := make(map[string]struct{}, totalIPs)
+			if file2, err := os.Open(tmpPath); err == nil {
+				sc2 := bufio.NewScanner(file2)
+				sc2.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+				for sc2.Scan() {
+					if t := strings.TrimSpace(sc2.Text()); t != "" {
+						scanned[t] = struct{}{}
+					}
+				}
+				file2.Close()
+			}
+			var nearby []string
+			for _, r := range all {
+				if !r.TunnelReady {
+					continue
+				}
+				for _, nip := range dnsscan.NearbyIPs(r.IP) {
+					if _, ok := scanned[nip]; ok {
+						continue
+					}
+					scanned[nip] = struct{}{}
+					nearby = append(nearby, nip)
+				}
+			}
+			if len(nearby) > 0 {
+				nearbyMsg := fmt.Sprintf("[DNS-NEARBY] expanding %d address(es) around tunnel-ready hits", len(nearby))
+				lf.write(nearbyMsg)
+				l.OnLog(nearbyMsg)
+				base := processedBase
+				totalWithNearby := base + len(nearby)
+				for i := 0; i < len(nearby) && !h.isStopped(); i += chunkSize {
+					end := i + chunkSize
+					if end > len(nearby) {
+						end = len(nearby)
+					}
+					sub := nearby[i:end]
+					results := dnsscan.ScanResolvers(h.ctx, sub, opts, makeProgress(totalWithNearby))
+					for j := range results {
+						results[j].Nearby = true
+					}
+					all = append(all, results...)
+					processedBase += len(sub)
+				}
+			}
+		}
+
+		reason := "completed"
+		if h.isStopped() {
+			reason = "stopped"
+		}
+		endMsg := fmt.Sprintf("[DNS-SCAN-END] reason=%s scanned=%d tunnel_ready=%d elapsed=%s",
+			reason, len(all), hitsTotal, time.Since(start).Round(time.Second))
+		lf.write(endMsg)
+		l.OnLog(endMsg)
+		lf.close()
+
+		// Whether the scan finished or was stopped, everything gathered so far is
+		// reported — a user-initiated stop is not an error (matches every other
+		// scan kind's behavior).
+		outDir := filepath.Join(dataDir, "dns scan")
+		paths, err := dnsscan.WriteReports(outDir, all)
+		if err != nil {
+			l.OnDone("", "report write failed: "+err.Error())
+			return
+		}
+		l.OnDone(paths.Full, "")
 	}()
 	return h
 }

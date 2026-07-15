@@ -121,6 +121,13 @@ fun HomeScreen(onSelect: (ScanKind) -> Unit, onConfigMaker: () -> Unit) {
             onClick = { onSelect(ScanKind.SPEED) },
         )
         ScanCard(
+            icon = Icons.Default.Public,
+            title = "DNS Resolver / Tunnel Scan",
+            subtitle = "Probe resolvers for open recursion, EDNS0 & tunnel-readiness",
+            accentColor = CyanAccent,
+            onClick = { onSelect(ScanKind.DNS) },
+        )
+        ScanCard(
             icon = Icons.Default.Download,
             title = "ASN Export",
             subtitle = "Search IranASNs, expand CIDRs to IP list",

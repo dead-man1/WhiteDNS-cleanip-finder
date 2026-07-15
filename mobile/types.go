@@ -22,6 +22,11 @@ type ScanConfig struct {
 	VerboseLog    bool   // emit per-endpoint probe log lines (slower; for debugging)
 	LiteMode      bool   // low-RAM/CPU mode for old/low-end devices (smaller chunks,
 	// lower concurrency, sequential domain probing, inter-chunk pauses)
+
+	// DNS resolver / tunnel scan (StartDNSScan) options.
+	DNSProtocol   string // "udp" | "tcp" | "both" | "all" (default "both"); "all" also probes DoT/DoH
+	DNSReference  string // truth-table reference resolver: "google" (default) | "cloudflare" | "quad9"
+	DNSTestNearby bool   // also expand + rescan the /24 around each tunnel-ready hit (disabled in LiteMode: multiplies scan size ~256x per hit)
 }
 
 // NewScanConfig returns an empty config (convenient constructor for gomobile,

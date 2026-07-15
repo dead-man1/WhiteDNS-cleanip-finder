@@ -28,6 +28,9 @@ data class FormState(
     val sniStrict: Boolean = false,
     val verboseLog: Boolean = false,
     val liteMode: Boolean = false,
+    val dnsProtocol: String = "both",     // dnsscan.Options.Protocol: udp | tcp | both | all
+    val dnsReference: String = "google",  // truth-table reference resolver
+    val dnsTestNearby: Boolean = false,   // expand + rescan the /24 around tunnel-ready hits
 )
 
 // Common single ports offered as checkboxes (multi-select). Ranges / anything
@@ -58,6 +61,25 @@ private val CONCURRENCY_PRESETS = listOf(
     ConcurrencyPreset("Gentle (25)",      "25", lowBw = true),
     ConcurrencyPreset("Safe (50)",        "50"),
     ConcurrencyPreset("Fast (100)",       "100"),
+)
+
+// DNS transport presets — couples a label with the engine protocol + port set,
+// matching the desktop TUI's dnsPortPresets so behavior stays identical.
+private data class DnsTransportPreset(val label: String, val protocol: String, val ports: String)
+private val DNS_TRANSPORT_PRESETS = listOf(
+    DnsTransportPreset("Port 53 - standard DNS (UDP + TCP)", "both", "53"),
+    DnsTransportPreset("DoT - DNS-over-TLS (853)", "all", "853"),
+    DnsTransportPreset("DoH - DNS-over-HTTPS (443)", "all", "443"),
+    DnsTransportPreset("All valid DNS ports (53 + 853 + 443)", "all", "53,853,443"),
+)
+
+// DNS reference resolver presets — the trusted resolver used to build the
+// truth table candidate answers are checked against for poisoning.
+private data class DnsReferencePreset(val label: String, val value: String)
+private val DNS_REFERENCE_PRESETS = listOf(
+    DnsReferencePreset("Google Public DNS - 8.8.8.8 (default)", "google"),
+    DnsReferencePreset("Cloudflare - 1.1.1.1", "cloudflare"),
+    DnsReferencePreset("Quad9 - 9.9.9.9", "quad9"),
 )
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
@@ -122,29 +144,87 @@ fun ScanConfigForm(
             }
         }
 
-        // ── Ports (checkbox multi-select) ─────────────────────────────────────
-        item {
-            SectionLabel("Ports")
-            Spacer(Modifier.height(4.dp))
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                COMMON_PORTS.forEach { p ->
-                    FilterChip(
-                        selected = hasPort(form.ports, p),
-                        onClick = { onFormChange(form.copy(ports = togglePort(form.ports, p))) },
-                        label = { Text(p) },
-                        modifier = Modifier.height(36.dp),
+        // ── Ports (checkbox multi-select) — not for DNS, which picks a transport
+        // preset below instead (port + protocol are coupled for that scan) ─────
+        if (kind != ScanKind.DNS) {
+            item {
+                SectionLabel("Ports")
+                Spacer(Modifier.height(4.dp))
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    COMMON_PORTS.forEach { p ->
+                        FilterChip(
+                            selected = hasPort(form.ports, p),
+                            onClick = { onFormChange(form.copy(ports = togglePort(form.ports, p))) },
+                            label = { Text(p) },
+                            modifier = Modifier.height(36.dp),
+                        )
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = form.ports,
+                    onValueChange = { onFormChange(form.copy(ports = it)) },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Selected ports (edit / add ranges)") },
+                    placeholder = { Text("443,2053,8000-8100") },
+                    singleLine = true,
+                )
+            }
+        }
+
+        // ── DNS transport + reference resolver + nearby — matches TUI screenDNSPorts
+        // / screenDNSReference / screenDNSNearby ────────────────────────────────
+        if (kind == ScanKind.DNS) {
+            item {
+                SectionLabel("DNS transport")
+                Spacer(Modifier.height(4.dp))
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    DNS_TRANSPORT_PRESETS.forEach { preset ->
+                        FilterChip(
+                            selected = form.dnsProtocol == preset.protocol && form.ports == preset.ports,
+                            onClick = {
+                                onFormChange(form.copy(dnsProtocol = preset.protocol, ports = preset.ports))
+                            },
+                            label = { Text(preset.label) },
+                            modifier = Modifier.fillMaxWidth().height(40.dp),
+                        )
+                    }
+                }
+
+                Spacer(Modifier.height(14.dp))
+                SectionLabel("Reference resolver (poisoning truth table)")
+                Spacer(Modifier.height(4.dp))
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    DNS_REFERENCE_PRESETS.forEach { preset ->
+                        FilterChip(
+                            selected = form.dnsReference == preset.value,
+                            onClick = { onFormChange(form.copy(dnsReference = preset.value)) },
+                            label = { Text(preset.label) },
+                            modifier = Modifier.fillMaxWidth().height(40.dp),
+                        )
+                    }
+                }
+
+                Spacer(Modifier.height(14.dp))
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Switch(
+                        checked = form.dnsTestNearby,
+                        enabled = !form.liteMode,
+                        onCheckedChange = { onFormChange(form.copy(dnsTestNearby = it)) },
                     )
+                    Column {
+                        Text("Test Nearby IPs", style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            if (form.liteMode)
+                                "Disabled in Lite mode — each hit would expand into a 256-address /24 rescan"
+                            else
+                                "Also expand + rescan the /24 around every tunnel-ready resolver found",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
             }
-            Spacer(Modifier.height(8.dp))
-            OutlinedTextField(
-                value = form.ports,
-                onValueChange = { onFormChange(form.copy(ports = it)) },
-                modifier = Modifier.fillMaxWidth(),
-                label = { Text("Selected ports (edit / add ranges)") },
-                placeholder = { Text("443,2053,8000-8100") },
-                singleLine = true,
-            )
         }
 
         // ── Workers (dropdown) + Low-bandwidth ────────────────────────────────

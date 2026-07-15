@@ -11,6 +11,7 @@ import android.util.Log
 import android.widget.Toast
 import android.provider.Settings
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
@@ -164,23 +165,34 @@ class MainActivity : ComponentActivity() {
                     Screen.Results -> "Results"
                 }
 
+                // Shared by the TopAppBar back arrow AND the system back
+                // gesture/button below — without the latter, Android's default
+                // back behavior finishes the Activity (closes the app) instead of
+                // navigating up through the in-app screen stack.
+                val goBack = {
+                    when (screen) {
+                        is Screen.Scanning -> {
+                            vm.stop()
+                            stopForegroundScanService()
+                            screen = Screen.Home
+                        }
+                        Screen.AsnPicker -> screen = Screen.Config(pendingKind)
+                        else -> screen = Screen.Home
+                    }
+                }
+
+                // Only intercept back while inside a sub-screen; on Home, let the
+                // system handle back normally (exits the app), matching the
+                // TopAppBar's back arrow which is likewise hidden on Home.
+                BackHandler(enabled = screen != Screen.Home) { goBack() }
+
                 Scaffold(
                     topBar = {
                         TopAppBar(
                             title = { Text(screenTitle) },
                             navigationIcon = {
                                 if (screen != Screen.Home) {
-                                    IconButton(onClick = {
-                                        when (screen) {
-                                            is Screen.Scanning -> {
-                                                vm.stop()
-                                                stopForegroundScanService()
-                                                screen = Screen.Home
-                                            }
-                                            Screen.AsnPicker -> screen = Screen.Config(pendingKind)
-                                            else -> screen = Screen.Home
-                                        }
-                                    }) {
+                                    IconButton(onClick = goBack) {
                                         Icon(Icons.Default.ArrowBack, contentDescription = "Back")
                                     }
                                 }
@@ -344,6 +356,7 @@ private fun ScanKind.label() = when (this) {
     ScanKind.HTTP       -> "HTTP Proxy"
     ScanKind.SOCKS5     -> "SOCKS5"
     ScanKind.SPEED      -> "Speed & Loss"
+    ScanKind.DNS        -> "DNS Resolver Scan"
     ScanKind.ASN_EXPORT -> "ASN Export"
 }
 
@@ -366,5 +379,8 @@ private fun FormState.toEngineConfig(constrainedDevice: Boolean = false): ScanCo
     cfg.setSNIStrict(sniStrict)
     cfg.setVerboseLog(verboseLog)
     cfg.setLiteMode(effectiveLiteMode)
+    cfg.setDNSProtocol(dnsProtocol)
+    cfg.setDNSReference(dnsReference)
+    cfg.setDNSTestNearby(dnsTestNearby && !effectiveLiteMode)
     return cfg
 }
